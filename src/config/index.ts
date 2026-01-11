@@ -150,6 +150,11 @@ function mergeConfigs(global: StoredConfig, project: StoredConfig): StoredConfig
     merged.errorHandling = { ...merged.errorHandling, ...project.errorHandling };
   }
 
+  // Override prompt template
+  if (project.prompt_template !== undefined) {
+    merged.prompt_template = project.prompt_template;
+  }
+
   return merged;
 }
 
@@ -412,6 +417,7 @@ export async function buildConfig(
     model: options.model,
     showTui: !options.headless,
     errorHandling,
+    promptTemplate: storedConfig.prompt_template,
   };
 }
 

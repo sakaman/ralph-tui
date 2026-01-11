@@ -44,3 +44,7 @@ export {
   parseLogsArgs,
   printLogsHelp,
 } from './logs.js';
+
+export {
+  executeTemplateCommand,
+} from './template.js';

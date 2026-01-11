@@ -21,6 +21,7 @@ import { getAgentRegistry } from '../plugins/agents/registry.js';
 import { getTrackerRegistry } from '../plugins/trackers/registry.js';
 import { updateSessionIteration, updateSessionStatus } from '../session/index.js';
 import { saveIterationLog } from '../logs/index.js';
+import { renderPrompt } from '../templates/index.js';
 
 /**
  * Pattern to detect completion signal in agent output
@@ -28,11 +29,22 @@ import { saveIterationLog } from '../logs/index.js';
 const PROMISE_COMPLETE_PATTERN = /<promise>\s*COMPLETE\s*<\/promise>/i;
 
 /**
- * Build prompt for the agent based on task
+ * Build prompt for the agent based on task using the template system.
+ * Falls back to a hardcoded default if template rendering fails.
  */
-function buildPrompt(task: TrackerTask, _config: RalphConfig): string {
-  const lines: string[] = [];
+function buildPrompt(task: TrackerTask, config: RalphConfig): string {
+  // Use the template system
+  const result = renderPrompt(task, config);
 
+  if (result.success && result.prompt) {
+    return result.prompt;
+  }
+
+  // Log template error and fall back to simple format
+  console.error(`Template rendering failed: ${result.error}`);
+
+  // Fallback prompt
+  const lines: string[] = [];
   lines.push('## Task');
   lines.push(`**ID**: ${task.id}`);
   lines.push(`**Title**: ${task.title}`);
@@ -43,17 +55,6 @@ function buildPrompt(task: TrackerTask, _config: RalphConfig): string {
     lines.push(task.description);
   }
 
-  if (task.labels && task.labels.length > 0) {
-    lines.push('');
-    lines.push(`**Labels**: ${task.labels.join(', ')}`);
-  }
-
-  if (task.dependsOn && task.dependsOn.length > 0) {
-    lines.push('');
-    lines.push(`**Dependencies**: ${task.dependsOn.join(', ')}`);
-  }
-
-  // Add instructions
   lines.push('');
   lines.push('## Instructions');
   lines.push('Complete the task described above. When finished, signal completion with:');

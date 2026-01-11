@@ -16,6 +16,7 @@ import {
   executeConfigCommand,
   executeSetupCommand,
   executeLogsCommand,
+  executeTemplateCommand,
 } from './commands/index.js';
 
 /**
@@ -35,6 +36,8 @@ Commands:
   logs [options]      View/manage iteration output logs
   setup [options]     Run interactive project setup
   config show         Display merged configuration
+  template show       Display current prompt template
+  template init       Copy default template for customization
   plugins agents      List available agent plugins
   plugins trackers    List available tracker plugins
   help, --help, -h    Show this help message
@@ -68,6 +71,8 @@ Examples:
   ralph-tui logs --clean --keep 10       # Clean up old logs
   ralph-tui plugins agents               # List agent plugins
   ralph-tui plugins trackers             # List tracker plugins
+  ralph-tui template show                # Show current prompt template
+  ralph-tui template init                # Create custom template
 `);
 }
 
@@ -117,6 +122,12 @@ async function handleSubcommand(args: string[]): Promise<boolean> {
   // Setup command
   if (command === 'setup') {
     await executeSetupCommand(args.slice(1));
+    return true;
+  }
+
+  // Template command
+  if (command === 'template') {
+    await executeTemplateCommand(args.slice(1));
     return true;
   }
 

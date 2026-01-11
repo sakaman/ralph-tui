@@ -93,6 +93,9 @@ export interface StoredConfig {
 
   /** Whether to auto-commit after successful tasks */
   autoCommit?: boolean;
+
+  /** Custom prompt template path (relative to cwd or absolute) */
+  prompt_template?: string;
 }
 
 /**
@@ -131,6 +134,9 @@ export interface RalphConfig {
 
   /** Error handling configuration */
   errorHandling: ErrorHandlingConfig;
+
+  /** Custom prompt template path (resolved) */
+  promptTemplate?: string;
 }
 
 /**
