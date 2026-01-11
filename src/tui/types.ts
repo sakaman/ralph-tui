@@ -11,6 +11,18 @@ import type { TaskPriority } from '../plugins/trackers/types.js';
 export type { TaskPriority };
 
 /**
+ * Blocker task info for display purposes
+ */
+export interface BlockerInfo {
+  /** Blocker task ID */
+  id: string;
+  /** Blocker task title */
+  title: string;
+  /** Blocker task status */
+  status: string;
+}
+
+/**
  * Task item displayed in the task list and detail view.
  * Extended from TrackerTask for full detail view support.
  */
@@ -35,6 +47,8 @@ export interface TaskItem {
   dependsOn?: string[];
   /** IDs of tasks that depend on this task */
   blocks?: string[];
+  /** Detailed info about tasks that are blocking this one (for display) */
+  blockedByTasks?: BlockerInfo[];
   /** Completion notes or close reason (if closed) */
   closeReason?: string;
   /** Acceptance criteria as markdown text or list */

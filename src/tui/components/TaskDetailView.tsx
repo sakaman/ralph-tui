@@ -289,7 +289,8 @@ export function TaskDetailView({ task, onBack: _onBack }: TaskDetailViewProps): 
 
         {/* Dependencies section */}
         {((task.dependsOn && task.dependsOn.length > 0) ||
-          (task.blocks && task.blocks.length > 0)) && (
+          (task.blocks && task.blocks.length > 0) ||
+          (task.blockedByTasks && task.blockedByTasks.length > 0)) && (
           <box style={{ marginBottom: 2 }}>
             <SectionHeader title="Dependencies" />
             <box
@@ -301,9 +302,24 @@ export function TaskDetailView({ task, onBack: _onBack }: TaskDetailViewProps): 
                 flexDirection: 'column',
               }}
             >
-              {task.dependsOn && task.dependsOn.length > 0 && (
+              {/* Show detailed blocker info if available (with title and status) */}
+              {task.blockedByTasks && task.blockedByTasks.length > 0 && (
                 <box style={{ marginBottom: 1 }}>
-                  <text fg={colors.status.warning}>Blocked by:</text>
+                  <text fg={colors.status.error}>⊘ Blocked by (unresolved):</text>
+                  {task.blockedByTasks.map((blocker) => (
+                    <text key={blocker.id} fg={colors.fg.secondary}>
+                      {'  '}- {blocker.id}: {blocker.title}
+                      <span fg={colors.fg.muted}> [{blocker.status}]</span>
+                    </text>
+                  ))}
+                </box>
+              )}
+
+              {/* Fallback to dependsOn IDs if blockedByTasks not available */}
+              {(!task.blockedByTasks || task.blockedByTasks.length === 0) &&
+                task.dependsOn && task.dependsOn.length > 0 && (
+                <box style={{ marginBottom: 1 }}>
+                  <text fg={colors.status.warning}>Depends on:</text>
                   {task.dependsOn.map((dep) => (
                     <text key={dep} fg={colors.fg.secondary}>
                       {'  '}- {dep}

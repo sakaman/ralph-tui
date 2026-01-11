@@ -980,3 +980,27 @@ Started: Sun 11 Jan 10:55:32 GMT 2026
   - useEffect to clamp selectedIndex prevents out-of-bounds when filter shrinks list
   - TaskStatus type extension requires updating colors.task and statusIndicators in theme.ts
 ---
+
+## 2026-01-11 - ralph-tui-45r.43
+- What was implemented:
+  - FEAT: Show all tasks with status indicators (actionable/blocked/closed)
+  - Added 'actionable' TaskStatus type for tasks ready to work on (green arrow)
+  - Added BlockerInfo interface to store blocker task details (id, title, status)
+  - Added blockedByTasks field to TaskItem for detailed blocker display
+  - New convertTasksWithDependencyStatus() function determines blocked/actionable status
+  - Dependencies checked: if all dependsOn tasks are closed/completed → actionable, else → blocked
+  - Task list now sorted by status: active → actionable → blocked → done → closed
+  - TaskDetailView shows detailed blocker info with task IDs, titles, and status
+  - Uses ⊘ indicator in red for blocked, ▶ indicator in green for actionable
+- Files changed:
+  - src/tui/theme.ts (updated) - Added 'actionable' to TaskStatus, colors.task, statusIndicators
+  - src/tui/types.ts (updated) - Added BlockerInfo interface, blockedByTasks field
+  - src/tui/components/RunApp.tsx (updated) - convertTasksWithDependencyStatus(), status-based sorting
+  - src/tui/components/TaskDetailView.tsx (updated) - Detailed blocker display section
+- **Learnings:**
+  - Dependency status check requires access to all tasks, not just the current one
+  - Creating a taskMap for O(1) lookup enables efficient dependency resolution
+  - Sorting by status priority improves UX - actionable tasks always visible at top
+  - External dependencies (not in task list) should be treated as potential blockers
+  - Visual indicators (▶ vs ⊘) with color coding make status instantly recognizable
+---

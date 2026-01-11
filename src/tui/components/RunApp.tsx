@@ -9,7 +9,7 @@ import type { ReactNode } from 'react';
 import { useState, useCallback, useEffect, useMemo } from 'react';
 import { colors, layout } from '../theme.js';
 import type { RalphStatus, TaskStatus } from '../theme.js';
-import type { TaskItem } from '../types.js';
+import type { TaskItem, BlockerInfo } from '../types.js';
 import { Header } from './Header.js';
 import { Footer } from './Footer.js';
 import { LeftPanel } from './LeftPanel.js';
@@ -53,15 +53,18 @@ export interface RunAppProps {
 }
 
 /**
- * Convert tracker status to TUI task status.
+ * Convert tracker status to TUI task status (basic mapping without dependency checking).
  * Maps: open -> pending, in_progress -> active, completed -> closed (greyed out), etc.
  * Note: 'done' status is used for tasks completed in the current session (green checkmark),
  * while 'closed' is for previously completed tasks (greyed out for historical view).
+ *
+ * For open tasks, the actual actionable/blocked status is determined later by
+ * convertTasksWithDependencyStatus() which checks if dependencies are resolved.
  */
 function trackerStatusToTaskStatus(trackerStatus: string): TaskStatus {
   switch (trackerStatus) {
     case 'open':
-      return 'pending';
+      return 'pending'; // Will be refined to actionable/blocked later
     case 'in_progress':
       return 'active';
     case 'completed':
@@ -93,6 +96,70 @@ function trackerTaskToTaskItem(task: TrackerTask): TaskItem {
     createdAt: task.createdAt,
     updatedAt: task.updatedAt,
   };
+}
+
+/**
+ * Convert all tasks and determine actionable/blocked status based on dependencies.
+ * A task is 'actionable' if it has no dependencies OR all its dependencies are completed/closed.
+ * A task is 'blocked' if it has any dependency that is NOT completed/closed.
+ */
+function convertTasksWithDependencyStatus(trackerTasks: TrackerTask[]): TaskItem[] {
+  // First, create a map of task IDs to their status and title for quick lookup
+  const taskMap = new Map<string, { status: string; title: string }>();
+  for (const task of trackerTasks) {
+    taskMap.set(task.id, { status: task.status, title: task.title });
+  }
+
+  // Convert each task, determining actionable/blocked based on dependencies
+  return trackerTasks.map((task) => {
+    const baseItem = trackerTaskToTaskItem(task);
+
+    // Only check dependencies for open/pending tasks
+    if (baseItem.status !== 'pending') {
+      return baseItem;
+    }
+
+    // If no dependencies, it's actionable
+    if (!task.dependsOn || task.dependsOn.length === 0) {
+      return { ...baseItem, status: 'actionable' as TaskStatus };
+    }
+
+    // Check if all dependencies are completed/closed/cancelled
+    const blockers: BlockerInfo[] = [];
+    for (const depId of task.dependsOn) {
+      const dep = taskMap.get(depId);
+      if (dep) {
+        // Dependency exists in our task list
+        if (dep.status !== 'completed' && dep.status !== 'cancelled' && dep.status !== 'closed') {
+          blockers.push({
+            id: depId,
+            title: dep.title,
+            status: dep.status,
+          });
+        }
+      } else {
+        // Dependency not in our list - assume it might be blocking (external dependency)
+        // We could fetch it, but for now we'll treat unknown deps as potential blockers
+        blockers.push({
+          id: depId,
+          title: `(external: ${depId})`,
+          status: 'unknown',
+        });
+      }
+    }
+
+    // If any blockers found, task is blocked
+    if (blockers.length > 0) {
+      return {
+        ...baseItem,
+        status: 'blocked' as TaskStatus,
+        blockedByTasks: blockers,
+      };
+    }
+
+    // All dependencies are resolved - task is actionable
+    return { ...baseItem, status: 'actionable' as TaskStatus };
+  });
 }
 
 /**
@@ -135,12 +202,27 @@ export function RunApp({
   // Show/hide closed tasks filter (default: show closed tasks)
   const [showClosedTasks, setShowClosedTasks] = useState(true);
 
-  // Filter tasks for display (optionally hide closed tasks)
+  // Filter and sort tasks for display
+  // Sort order: active → actionable → blocked → done → closed
   // This is computed early so keyboard handlers can use displayedTasks.length
-  const displayedTasks = useMemo(
-    () => (showClosedTasks ? tasks : tasks.filter((t) => t.status !== 'closed')),
-    [tasks, showClosedTasks]
-  );
+  const displayedTasks = useMemo(() => {
+    // Status priority for sorting (lower = higher priority)
+    const statusPriority: Record<TaskStatus, number> = {
+      active: 0,
+      actionable: 1,
+      pending: 2, // Treat pending same as actionable (shouldn't happen often)
+      blocked: 3,
+      done: 4,
+      closed: 5,
+    };
+
+    const filtered = showClosedTasks ? tasks : tasks.filter((t) => t.status !== 'closed');
+    return [...filtered].sort((a, b) => {
+      const priorityA = statusPriority[a.status] ?? 10;
+      const priorityB = statusPriority[b.status] ?? 10;
+      return priorityA - priorityB;
+    });
+  }, [tasks, showClosedTasks]);
 
   // Clamp selectedIndex when displayedTasks shrinks (e.g., when hiding closed tasks)
   useEffect(() => {
@@ -156,8 +238,9 @@ export function RunApp({
         case 'engine:started':
           setStatus('running');
           // Initialize task list from engine with proper status mapping
+          // Uses convertTasksWithDependencyStatus to determine actionable/blocked
           if (event.tasks && event.tasks.length > 0) {
-            setTasks(event.tasks.map(trackerTaskToTaskItem));
+            setTasks(convertTasksWithDependencyStatus(event.tasks));
           }
           break;
 

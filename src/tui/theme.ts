@@ -35,6 +35,7 @@ export const colors = {
   task: {
     done: '#9ece6a',
     active: '#7aa2f7',
+    actionable: '#9ece6a', // Green - ready to work on
     pending: '#565f89',
     blocked: '#f7768e',
     closed: '#414868', // Greyed out for completed/closed tasks
@@ -57,12 +58,13 @@ export const colors = {
 
 /**
  * Status indicator symbols
- * Task status: ✓ (done), ▶ (active), ○ (pending), ⊘ (blocked), ✓ (closed - greyed)
+ * Task status: ✓ (done), ▶ (active/actionable), ○ (pending), ⊘ (blocked), ✓ (closed - greyed)
  * Ralph status: ▶ (running), ◎ (pausing), ⏸ (paused), ■ (stopped), ✓ (complete), ○ (idle)
  */
 export const statusIndicators = {
   done: '✓',
   active: '▶',
+  actionable: '▶', // Ready to work on - green arrow
   pending: '○',
   blocked: '⊘',
   closed: '✓', // Same indicator as done, but will be greyed out
@@ -145,11 +147,12 @@ export type RalphStatus = 'running' | 'pausing' | 'paused' | 'stopped' | 'comple
  * Task status types matching the acceptance criteria
  * - 'done': Task completed in current session (green checkmark)
  * - 'active': Task currently being worked on (blue arrow)
- * - 'pending': Task waiting to be worked on (grey circle)
+ * - 'actionable': Task ready to work on with no blocking dependencies (green arrow)
+ * - 'pending': Task waiting to be worked on (grey circle) - legacy, prefer actionable
  * - 'blocked': Task blocked by dependencies (red symbol)
  * - 'closed': Previously completed task (greyed out checkmark for historical tasks)
  */
-export type TaskStatus = 'done' | 'active' | 'pending' | 'blocked' | 'closed';
+export type TaskStatus = 'done' | 'active' | 'actionable' | 'pending' | 'blocked' | 'closed';
 
 /**
  * Get the color for a given task status
