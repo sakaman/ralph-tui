@@ -897,3 +897,62 @@ Started: Sun 11 Jan 10:55:32 GMT 2026
   - The useCallback dependency array must include state used in early returns (showHelp)
   - Overlay components with absolute positioning work well for modal dialogs in OpenTUI
 ---
+
+## 2026-01-11 - ralph-tui-45r.35
+- What was implemented:
+  - BUG: Fixed incorrect docs URL pointing to anthropics/ralph-tui
+  - Replaced hardcoded URLs with dynamic detection from git remote origin
+  - Added getRepoUrl() function that detects SSH and HTTPS git remote URLs
+  - Converts SSH URLs (git@github.com:user/repo.git) to HTTPS format
+  - Caches detected URL to avoid repeated git calls in same session
+  - Falls back to subsy/ralph-tui when not in a git repo
+  - Refactored DOC_PATHS to store relative paths, base URL composed at runtime
+- Files changed:
+  - src/commands/docs.ts (updated) - Dynamic repo URL detection
+- **Learnings:**
+  - Git remote URLs come in two formats: SSH (git@github.com:user/repo) and HTTPS
+  - Regex patterns need (?:\.git)?$ to handle optional .git suffix
+  - Caching expensive operations (git remote calls) improves CLI responsiveness
+  - Separating base URL from section paths enables flexible URL composition
+---
+
+## 2026-01-11 - ralph-tui-45r.37
+- What was implemented:
+  - BUG: TUI should show in_progress tasks
+  - Added 'tasks' array to EngineStartedEvent in engine/types.ts
+  - Engine now fetches and emits initial tasks in 'engine:started' event
+  - RunApp now initializes task list from engine:started event
+  - Added trackerStatusToTaskStatus() to map tracker status to TUI status
+  - Added trackerTaskToTaskItem() helper for TrackerTask → TaskItem conversion
+- Files changed:
+  - src/engine/types.ts (updated) - Added tasks array to EngineStartedEvent
+  - src/engine/index.ts (updated) - Fetch and emit tasks in start()
+  - src/tui/components/RunApp.tsx (updated) - Handle initial tasks, status mapping
+- **Learnings:**
+  - Event-driven UIs need initial state via events, not just reactive updates
+  - Domain model boundaries: TrackerTaskStatus vs TUI TaskStatus require mapping
+  - The engine already fetched both open/in_progress tasks but didn't expose them to the TUI
+  - Keeping the event-driven pattern (vs props) maintains architectural consistency
+---
+
+## 2026-01-11 - ralph-tui-45r.36
+- What was implemented:
+  - BUG: TUI should not close automatically - only by user command
+  - The TUI was closing when engine stopped (all tasks done, no tasks, max iterations, error)
+  - Modified runWithTui to use a Promise that only resolves when user explicitly quits
+  - Added 'complete' and 'idle' to RalphStatus type for clearer status display
+  - Updated Header and ProgressDashboard to show descriptive stop reasons
+  - RunApp now uses event-driven status updates instead of engine.getStatus()
+  - Status mapping: completed → "Complete", no_tasks → "No More Tasks", etc.
+- Files changed:
+  - src/commands/run.tsx (updated) - Added quit promise pattern to keep TUI alive
+  - src/tui/theme.ts (updated) - Added 'complete' and 'idle' status types and indicators
+  - src/tui/components/Header.tsx (updated) - Added complete/idle status display
+  - src/tui/components/ProgressDashboard.tsx (updated) - Added complete/idle status display
+  - src/tui/components/RunApp.tsx (updated) - Event-driven status, removed unused code
+- **Learnings:**
+  - The engine.start() promise resolving shouldn't mean "exit TUI" - decouple lifecycle
+  - Use a separate quit promise pattern to wait for explicit user action
+  - Event-driven status (via useState) is more reliable than calling engine.getStatus()
+  - Distinguishing stop reasons (complete vs idle vs stopped) improves user experience
+---
