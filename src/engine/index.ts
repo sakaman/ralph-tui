@@ -1228,8 +1228,22 @@ export class ExecutionEngine {
         `[agent-switch] Switching to fallback: ${previousAgent} → ${newAgentPlugin} (rate limit)`
       );
     } else {
+      // Calculate duration on fallback for recovery logging
+      let durationOnFallback = '';
+      if (this.state.rateLimitState?.limitedAt) {
+        const limitedAt = new Date(this.state.rateLimitState.limitedAt);
+        const durationMs = Date.now() - limitedAt.getTime();
+        const durationSecs = Math.round(durationMs / 1000);
+        if (durationSecs >= 60) {
+          const mins = Math.floor(durationSecs / 60);
+          const secs = durationSecs % 60;
+          durationOnFallback = ` (${mins}m ${secs}s on fallback)`;
+        } else {
+          durationOnFallback = ` (${durationSecs}s on fallback)`;
+        }
+      }
       console.log(
-        `[agent-switch] Recovering to primary: ${previousAgent} → ${newAgentPlugin}`
+        `[agent-switch] Recovering to primary: ${previousAgent} → ${newAgentPlugin}${durationOnFallback}`
       );
     }
 
