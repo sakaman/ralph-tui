@@ -45,6 +45,7 @@ Commands:
   plugins trackers    List available tracker plugins
   docs [section]      Open documentation in browser
   help, --help, -h    Show this help message
+  version, --version  Show version number
 
 Run Options:
   --epic <id>         Epic ID for beads tracker
@@ -105,6 +106,14 @@ Examples:
  */
 async function handleSubcommand(args: string[]): Promise<boolean> {
   const command = args[0];
+
+  // Version command
+  if (command === 'version' || command === '--version' || command === '-v') {
+    // Dynamic import to get version from package.json
+    const pkg = await import('../package.json', { with: { type: 'json' } });
+    console.log(`ralph-tui ${pkg.default.version}`);
+    return true;
+  }
 
   // Help command
   if (command === 'help' || command === '--help' || command === '-h') {
