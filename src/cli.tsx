@@ -45,7 +45,7 @@ Commands:
   plugins trackers    List available tracker plugins
   docs [section]      Open documentation in browser
   help, --help, -h    Show this help message
-  version, --version  Show version number
+  version, --version, -v  Show version number
 
 Run Options:
   --epic <id>         Epic ID for beads tracker
