@@ -108,6 +108,23 @@ ralph-tui run --iterations 5
 ralph-tui run --headless
 ```
 
+### Create PRD Options
+
+```bash
+# Create a PRD with AI assistance (default chat mode)
+ralph-tui create-prd
+ralph-tui prime  # Alias
+
+# Use a custom PRD skill from skills_dir
+ralph-tui create-prd --prd-skill my-custom-skill
+
+# Override agent
+ralph-tui create-prd --agent claude
+
+# Output to custom directory
+ralph-tui create-prd --output ./docs
+```
+
 ### TUI Keyboard Shortcuts
 
 | Key | Action |
@@ -121,6 +138,20 @@ ralph-tui run --headless
 | `?` | Show help |
 
 See the [full CLI reference](https://ralph-tui.com/docs/cli/overview) for all options.
+
+### Custom Skills Directory
+
+You can configure a custom `skills_dir` in your config file to use custom PRD skills:
+
+```bash
+# In .ralph-tui/config.toml or ~/.config/ralph-tui/config.toml
+skills_dir = "/path/to/my-skills"
+
+# Then use custom skills
+ralph-tui create-prd --prd-skill my-custom-skill
+```
+
+Skills must be folders inside `skills_dir` containing a `SKILL.md` file.
 
 ## Contributing
 
