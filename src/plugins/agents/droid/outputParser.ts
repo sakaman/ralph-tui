@@ -175,7 +175,7 @@ function parseToolCall(value: unknown): DroidToolCall | null {
     readString(record.call_id) ??
     readString(record.callId);
 
-  if (typeof args === 'string' || typeof args === 'object') {
+  if (typeof args === 'string' || (typeof args === 'object' && args !== null)) {
     return {
       id,
       name,
@@ -446,11 +446,13 @@ export class DroidCostAccumulator {
     this.summary.events += 1;
 
     if (!cost.totalTokens) {
-      this.summary.totalTokens =
-        this.summary.inputTokens +
-        this.summary.outputTokens +
-        this.summary.cacheReadTokens +
-        this.summary.cacheWriteTokens;
+      // When totalTokens isn't provided, add the sum of this event's components
+      const eventTotal =
+        (cost.inputTokens ?? 0) +
+        (cost.outputTokens ?? 0) +
+        (cost.cacheReadTokens ?? 0) +
+        (cost.cacheWriteTokens ?? 0);
+      this.summary.totalTokens += eventTotal;
     }
   }
 
