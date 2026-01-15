@@ -189,6 +189,20 @@ bun run lint        # Run linter
 bun run lint:fix    # Auto-fix lint issues
 ```
 
+### Testing
+
+```bash
+bun test            # Run all tests
+bun test --watch    # Run tests in watch mode
+bun test --coverage # Run tests with coverage
+```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md#testing) for detailed testing documentation including:
+- Test file naming conventions
+- Using factories and mocks
+- Writing new tests
+- Coverage requirements
+
 ### Project Structure
 
 ```
