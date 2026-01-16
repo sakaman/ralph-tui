@@ -266,7 +266,9 @@ export class StreamingOutputParser {
       // Extract both string and segment representations
       const extracted = this.extractReadableContent(line);
       if (extracted) {
-        newContent += extracted + '\n';
+        // Strip any trailing newlines from extracted content to avoid doubles
+        // (formatters like formatToolCall add their own trailing newlines)
+        newContent += extracted.replace(/\n+$/, '') + '\n';
       }
 
       const extractedSegments = this.extractReadableSegments(line);
