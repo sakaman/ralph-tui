@@ -14,7 +14,6 @@ import { stripAnsiCodes, type FormattedSegment } from '../../plugins/agents/outp
 import { formatElapsedTime } from '../theme.js';
 import { SubagentSections } from './SubagentSection.js';
 import { parseAgentOutput } from '../output-parser.js';
-import { FormattedText } from './FormattedText.js';
 
 /**
  * Priority label mapping for display
@@ -574,11 +573,10 @@ function TaskOutputView({
     return parseAgentOutput(iterationOutput, agentName);
   }, [iterationOutput, isLiveStreaming, agentName]);
 
-  // Use segments for TUI-native color rendering when available
-  // Works for both live streaming and completed output (if segments were captured)
-  const displaySegments = iterationSegments && iterationSegments.length > 0
-    ? iterationSegments
-    : undefined;
+  // Note: Full segment-based coloring (FormattedText) disabled due to OpenTUI
+  // span rendering issues causing black backgrounds and character loss.
+  // Using simple line-based coloring for tool calls instead.
+  void iterationSegments;
 
   // Parse model info for display
   const modelDisplay = currentModel
@@ -653,11 +651,19 @@ function TaskOutputView({
         }}
       >
         <scrollbox style={{ flexGrow: 1, padding: 1 }}>
-          {/* Prefer segments for TUI-native colors during live streaming */}
-          {displaySegments ? (
-            <FormattedText segments={displaySegments} />
-          ) : displayOutput !== undefined && displayOutput.length > 0 ? (
-            <text fg={colors.fg.secondary}>{displayOutput}</text>
+          {/* Simple line-based coloring: tool call lines get accent color */}
+          {displayOutput !== undefined && displayOutput.length > 0 ? (
+            <box style={{ flexDirection: 'column' }}>
+              {displayOutput.split('\n').map((line, i) => {
+                // Color lines that start with [toolname] pattern
+                const isToolCall = /^\[[\w-]+\]/.test(line);
+                return (
+                  <text key={i} fg={isToolCall ? colors.accent.primary : colors.fg.secondary}>
+                    {line}
+                  </text>
+                );
+              })}
+            </box>
           ) : displayOutput === '' ? (
             <text fg={colors.fg.muted}>No output captured</text>
           ) : currentIteration === 0 ? (
