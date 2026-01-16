@@ -64,7 +64,7 @@ On macOS, Ralph TUI uses the native `sandbox-exec` command with dynamically gene
 - The profile denies access by default, then allowlists specific paths
 - System directories (`/usr`, `/bin`, `/Applications`, etc.) are read-only
 - Your project directory is read-write
-- Agent auth paths (e.g., `~/.claude`) are mounted read-only
+- Agent auth paths (e.g., `~/.claude`) are mounted read-write to allow OAuth token refresh
 
 ### Deprecation Notice
 

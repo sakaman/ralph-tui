@@ -19,6 +19,19 @@ export interface SandboxWrapOptions {
 }
 
 const LINUX_SYSTEM_DIRS = ['/usr', '/bin', '/lib', '/lib64', '/sbin', '/etc'];
+
+/**
+ * Escape a path for safe inclusion in Seatbelt profile strings.
+ * Prevents injection attacks by escaping quotes, backslashes, and newlines.
+ */
+function escapeSeatbeltPath(path: string): string {
+  return path
+    .replace(/\\/g, '\\\\') // Escape backslashes first
+    .replace(/"/g, '\\"') // Escape double quotes
+    .replace(/\n/g, '\\n') // Escape newlines
+    .replace(/\r/g, '\\r'); // Escape carriage returns
+}
+
 const MACOS_SYSTEM_DIRS = [
   '/usr',
   '/bin',
@@ -160,7 +173,7 @@ export class SandboxWrapper {
     lines.push('; System directories (read-only)');
     for (const dir of MACOS_SYSTEM_DIRS) {
       if (existsSync(dir)) {
-        lines.push(`(allow file-read* (subpath "${dir}"))`);
+        lines.push(`(allow file-read* (subpath "${escapeSeatbeltPath(dir)}"))`);
       }
     }
     lines.push('');
@@ -175,13 +188,13 @@ export class SandboxWrapper {
 
     // Working directory (read-write)
     lines.push('; Working directory (read-write)');
-    lines.push(`(allow file-read* file-write* (subpath "${workDir}"))`);
+    lines.push(`(allow file-read* file-write* (subpath "${escapeSeatbeltPath(workDir)}"))`);
 
     // Additional allowed paths (read-write)
     const allowPaths = this.normalizePaths(this.config.allowPaths ?? [], workDir);
     for (const path of allowPaths) {
       if (path !== workDir && existsSync(path)) {
-        lines.push(`(allow file-read* file-write* (subpath "${path}"))`);
+        lines.push(`(allow file-read* file-write* (subpath "${escapeSeatbeltPath(path)}"))`);
       }
     }
 
@@ -191,7 +204,7 @@ export class SandboxWrapper {
     const authPaths = this.normalizePaths(this.requirements.authPaths, workDir);
     for (const path of authPaths) {
       if (existsSync(path)) {
-        lines.push(`(allow file-read* file-write* (subpath "${path}"))`);
+        lines.push(`(allow file-read* file-write* (subpath "${escapeSeatbeltPath(path)}"))`);
       }
     }
     lines.push('');
@@ -205,7 +218,7 @@ export class SandboxWrapper {
     ]);
     for (const path of readOnlyPaths) {
       if (existsSync(path)) {
-        lines.push(`(allow file-read* (subpath "${path}"))`);
+        lines.push(`(allow file-read* (subpath "${escapeSeatbeltPath(path)}"))`);
       }
     }
 
@@ -217,8 +230,15 @@ export class SandboxWrapper {
     const resolved = paths
       .filter((path) => path.trim().length > 0)
       .map((path) => {
-        // Expand ~ to home directory
-        const expanded = path.startsWith('~/') ? path.replace('~', home) : path;
+        // Expand ~ to home directory (both bare "~" and "~/...")
+        let expanded: string;
+        if (path === '~') {
+          expanded = home;
+        } else if (path.startsWith('~/')) {
+          expanded = home + path.slice(1);
+        } else {
+          expanded = path;
+        }
         return isAbsolute(expanded) ? expanded : resolve(cwd, expanded);
       });
     return Array.from(new Set(resolved));
