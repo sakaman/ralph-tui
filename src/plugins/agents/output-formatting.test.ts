@@ -250,6 +250,8 @@ describe('processAgentEvents', () => {
     const result = processAgentEvents(events);
     expect(result).toContain('[read]');
     expect(result).toContain('/test.ts');
+    // Tool calls always start with newline for separation
+    expect(result.startsWith('\n')).toBe(true);
   });
 
   test('displays error events', () => {
@@ -293,25 +295,24 @@ describe('processAgentEvents', () => {
     expect(result).toContain('Done!');
   });
 
-  test('adds newline before tool_use when text does not end with newline', () => {
+  test('tool_use always starts on its own line', () => {
     const events = [
       { type: 'text', content: 'Let me check that' },
       { type: 'tool_use', name: 'read', input: { file_path: '/test.ts' } },
     ];
     const result = processAgentEvents(events);
-    // Should have newline between text and tool call
+    // Tool call should be on its own line
     expect(result).toContain('Let me check that\n[read]');
   });
 
-  test('does not add extra newline when text already ends with newline', () => {
+  test('tool_use on its own still has leading newline', () => {
+    // This handles streaming where tool_use comes in its own chunk
     const events = [
-      { type: 'text', content: 'Let me check that\n' },
       { type: 'tool_use', name: 'read', input: { file_path: '/test.ts' } },
     ];
     const result = processAgentEvents(events);
-    // Should NOT have double newline
-    expect(result).not.toContain('\n\n[read]');
-    expect(result).toContain('that\n[read]');
+    // Should start with newline so it appears on its own line
+    expect(result).toMatch(/^\n\[read\]/);
   });
 
   test('returns empty string for empty events array', () => {
