@@ -402,8 +402,9 @@ export function segmentsToPlainText(segments: FormattedSegment[]): string {
  * Strip ANSI escape sequences from a string.
  * Used to clean output for TUI rendering where ANSI codes would cause artifacts.
  * Matches: ESC[...letter, ESC]...BEL, and mode-switching sequences.
+ * Includes SGR (Select Graphic Rendition) codes for both foreground and background colors.
  */
-const ANSI_REGEX = /\x1b\[[0-9;?]*[a-zA-Z]|\x1b\][^\x07]*\x07|\x1b[()][AB012]|\[\?[0-9;]*[a-zA-Z]/g;
+const ANSI_REGEX = /\x1b\[[0-9;]*[a-zA-Z]|\x1b\][^\x07]*\x07|\x1b[()][AB012]|\[\?[0-9;]*[a-zA-Z]|\x1b\[4[0-9;]*m|\x1b\[10[0-9;]*m/g;
 
 export function stripAnsiCodes(str: string): string {
   return str.replace(ANSI_REGEX, '');

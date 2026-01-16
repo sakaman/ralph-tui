@@ -36,19 +36,27 @@ export interface FormattedTextProps {
 /**
  * Render an array of formatted segments with TUI-native colors.
  * Uses a single <text> with <span> elements for inline coloring.
- * Sets explicit transparent background on spans to avoid OpenTUI artifacts.
+ * Note: We use the panel background color (bg.secondary) instead of "transparent"
+ * because OpenTUI doesn't properly support transparent span backgrounds.
  */
 export function FormattedText({ segments }: FormattedTextProps): ReactNode {
   if (segments.length === 0) {
     return null;
   }
 
+  // Use panel background to avoid black background artifacts
+  const panelBg = colors.bg.secondary;
+
   return (
-    <text>
+    <text fg={COLOR_MAP.default}>
       {segments.map((segment, index) => {
-        const color = COLOR_MAP[segment.color ?? 'default'];
+        const color = segment.color;
+        if (!color || color === 'default') {
+          return segment.text;
+        }
+
         return (
-          <span key={index} fg={color} bg="transparent">
+          <span key={index} fg={COLOR_MAP[color]} bg={panelBg}>
             {segment.text}
           </span>
         );
