@@ -330,6 +330,37 @@ describe('Template Engine - Variables and Context', () => {
       expect(vars.acceptanceCriteria).toContain('Criterion 1');
       expect(vars.acceptanceCriteria).toContain('Criterion 2');
     });
+
+    test('extracts acceptance criteria from ## Acceptance Criteria section in description', () => {
+      const task = createMockTask({
+        description: `Some intro text
+
+## Acceptance Criteria
+- First criterion
+- Second criterion
+
+## Other section`,
+      });
+      const config = createMockConfig();
+      const vars = buildTemplateVariables(task, config);
+
+      expect(vars.acceptanceCriteria).toContain('First criterion');
+      expect(vars.acceptanceCriteria).toContain('Second criterion');
+    });
+
+    test('extracts acceptance criteria from checklist items in description', () => {
+      const task = createMockTask({
+        description: `Task description with checklist:
+- [ ] Unchecked item
+- [x] Checked item
+* [ ] Another unchecked`,
+      });
+      const config = createMockConfig();
+      const vars = buildTemplateVariables(task, config);
+
+      expect(vars.acceptanceCriteria).toContain('[ ] Unchecked item');
+      expect(vars.acceptanceCriteria).toContain('[x] Checked item');
+    });
   });
 
   describe('buildTemplateContext', () => {
@@ -767,6 +798,7 @@ describe('Template Engine - Rendering', () => {
       // Note: The source key for caching includes the template content,
       // so different templates will have different cache entries anyway
     });
+
   });
 });
 
