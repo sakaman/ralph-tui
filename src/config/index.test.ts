@@ -534,13 +534,41 @@ describe('Config merging - scalar overrides', () => {
 
   test('project replaces fallbackAgents array', async () => {
     await writeTomlConfig(globalConfigPath, { fallbackAgents: ['claude', 'codex'] });
-    
+
     const projectConfigDir = join(tempDir, '.ralph-tui');
     await mkdir(projectConfigDir, { recursive: true });
     await writeTomlConfig(join(projectConfigDir, 'config.toml'), { fallbackAgents: ['droid'] });
 
     const config = await loadStoredConfig(tempDir, globalConfigPath);
     expect(config.fallbackAgents).toEqual(['droid']);
+  });
+
+  test('project overrides executable', async () => {
+    await writeTomlConfig(globalConfigPath, { executable: 'global-ccr code' });
+
+    const projectConfigDir = join(tempDir, '.ralph-tui');
+    await mkdir(projectConfigDir, { recursive: true });
+    await writeTomlConfig(join(projectConfigDir, 'config.toml'), { executable: 'project-ccr code' });
+
+    const config = await loadStoredConfig(tempDir, globalConfigPath);
+    expect(config.executable).toBe('project-ccr code');
+  });
+
+  test('executable from global config is preserved when project has none', async () => {
+    await writeTomlConfig(globalConfigPath, {
+      agent: 'claude',
+      executable: 'ccr code',
+    });
+
+    const projectConfigDir = join(tempDir, '.ralph-tui');
+    await mkdir(projectConfigDir, { recursive: true });
+    await writeTomlConfig(join(projectConfigDir, 'config.toml'), {
+      maxIterations: 20,  // Other field, no executable
+    });
+
+    const config = await loadStoredConfig(tempDir, globalConfigPath);
+    expect(config.executable).toBe('ccr code');
+    expect(config.maxIterations).toBe(20);
   });
 });
 

@@ -119,8 +119,27 @@ export const StoredConfigSchema = z
     // Agent-specific options (shorthand for common settings)
     agent: z.string().optional(),
     agentCommand: z.string().optional(),
-    /** Custom command/executable path for the agent (e.g., 'ccr code' for Claude Code Router) */
-    command: z.string().optional(),
+    /**
+     * Custom executable path for the agent.
+     *
+     * Use this to route agent requests through wrapper tools like Claude Code Router (CCR)
+     * or to specify a custom binary location.
+     *
+     * Precedence (highest to lowest):
+     * 1. Agent-specific: [[agents]] command field
+     * 2. Top-level: this field
+     * 3. Plugin default: e.g., "claude" for Claude plugin
+     *
+     * @example "ccr code" - Route through Claude Code Router
+     * @example "/opt/bin/my-claude" - Absolute path to custom binary
+     */
+    executable: z
+      .string()
+      .refine(
+        (cmd) => !/[;&|`$()]/.test(cmd),
+        'Executable path cannot contain shell metacharacters (;&|`$()). Use a wrapper script instead.'
+      )
+      .optional(),
     agentOptions: AgentOptionsSchema.optional(),
 
     // Tracker-specific options (shorthand for common settings)

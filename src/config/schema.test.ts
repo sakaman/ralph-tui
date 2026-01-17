@@ -391,6 +391,84 @@ describe('validateStoredConfig', () => {
   });
 });
 
+describe('StoredConfigSchema executable field', () => {
+  test('accepts valid executable paths', () => {
+    const result = StoredConfigSchema.parse({
+      executable: 'ccr code',
+    });
+    expect(result.executable).toBe('ccr code');
+  });
+
+  test('accepts absolute paths', () => {
+    const result = StoredConfigSchema.parse({
+      executable: '/opt/bin/my-claude',
+    });
+    expect(result.executable).toBe('/opt/bin/my-claude');
+  });
+
+  test('accepts paths with arguments', () => {
+    const result = StoredConfigSchema.parse({
+      executable: 'ccr code --verbose',
+    });
+    expect(result.executable).toBe('ccr code --verbose');
+  });
+
+  test('rejects executables with semicolons (command chaining)', () => {
+    expect(() =>
+      StoredConfigSchema.parse({
+        executable: 'ccr; rm -rf /',
+      })
+    ).toThrow(/shell metacharacters/);
+  });
+
+  test('rejects executables with ampersands (background execution)', () => {
+    expect(() =>
+      StoredConfigSchema.parse({
+        executable: 'ccr & malicious',
+      })
+    ).toThrow(/shell metacharacters/);
+  });
+
+  test('rejects executables with pipes (command piping)', () => {
+    expect(() =>
+      StoredConfigSchema.parse({
+        executable: 'ccr | tee /etc/passwd',
+      })
+    ).toThrow(/shell metacharacters/);
+  });
+
+  test('rejects executables with backticks (command substitution)', () => {
+    expect(() =>
+      StoredConfigSchema.parse({
+        executable: 'ccr `whoami`',
+      })
+    ).toThrow(/shell metacharacters/);
+  });
+
+  test('rejects executables with dollar signs (variable expansion)', () => {
+    expect(() =>
+      StoredConfigSchema.parse({
+        executable: 'ccr $HOME',
+      })
+    ).toThrow(/shell metacharacters/);
+  });
+
+  test('rejects executables with parentheses (subshells)', () => {
+    expect(() =>
+      StoredConfigSchema.parse({
+        executable: 'ccr $(cat /etc/passwd)',
+      })
+    ).toThrow(/shell metacharacters/);
+  });
+
+  test('allows dashes, underscores, and slashes in paths', () => {
+    const result = StoredConfigSchema.parse({
+      executable: '/usr/local/bin/my-agent_v2',
+    });
+    expect(result.executable).toBe('/usr/local/bin/my-agent_v2');
+  });
+});
+
 describe('formatConfigErrors', () => {
   test('formats single error', () => {
     const errors: ConfigValidationError[] = [
