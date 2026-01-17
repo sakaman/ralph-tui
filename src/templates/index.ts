@@ -23,10 +23,6 @@ export {
   getCustomTemplatePath,
   clearTemplateCache,
   getUserConfigDir,
-  getDefaultPromptFilename,
-  getUserPromptPath,
-  getBundledPrompt,
-  initializeUserPrompts,
   installBuiltinTemplates,
   installGlobalTemplates,
   getProjectTemplatePath,
@@ -39,8 +35,3 @@ export {
   BEADS_BV_TEMPLATE,
   JSON_TEMPLATE,
 } from './builtin.js';
-
-export {
-  PROMPT_JSON,
-  PROMPT_BEADS,
-} from './prompts.js';

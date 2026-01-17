@@ -14,10 +14,8 @@ import {
   getTemplateTypeFromPlugin,
   getUserConfigDir,
   getTemplateFilename,
-  getDefaultPromptFilename,
   getProjectTemplatePath,
   getGlobalTemplatePath,
-  getUserPromptPath,
   loadTemplate,
   buildTemplateVariables,
   buildTemplateContext,
@@ -25,8 +23,6 @@ import {
   clearTemplateCache,
   getCustomTemplatePath,
   copyBuiltinTemplate,
-  getBundledPrompt,
-  initializeUserPrompts,
   installGlobalTemplates,
   installBuiltinTemplates,
 } from '../../src/templates/engine.js';
@@ -182,24 +178,6 @@ describe('Template Engine - Pure Functions', () => {
     });
   });
 
-  describe('getDefaultPromptFilename (legacy)', () => {
-    test('returns prompt-beads.md for beads type', () => {
-      expect(getDefaultPromptFilename('beads')).toBe('prompt-beads.md');
-    });
-
-    test('returns prompt-beads.md for beads-bv type', () => {
-      expect(getDefaultPromptFilename('beads-bv')).toBe('prompt-beads.md');
-    });
-
-    test('returns prompt.md for json type', () => {
-      expect(getDefaultPromptFilename('json')).toBe('prompt.md');
-    });
-
-    test('returns prompt.md for default type', () => {
-      expect(getDefaultPromptFilename('default')).toBe('prompt.md');
-    });
-  });
-
   describe('getProjectTemplatePath', () => {
     test('returns path under .ralph-tui/templates/', () => {
       const path = getProjectTemplatePath('/my/project', 'beads');
@@ -224,13 +202,6 @@ describe('Template Engine - Pure Functions', () => {
     });
   });
 
-  describe('getUserPromptPath (legacy)', () => {
-    test('returns path under ~/.config/ralph-tui/', () => {
-      const path = getUserPromptPath('beads');
-      expect(path).toContain('.config/ralph-tui/prompt-beads.md');
-    });
-  });
-
   describe('getCustomTemplatePath', () => {
     test('returns default filename in cwd', () => {
       const path = getCustomTemplatePath('/my/project');
@@ -243,19 +214,6 @@ describe('Template Engine - Pure Functions', () => {
     });
   });
 
-  describe('getBundledPrompt', () => {
-    test('returns prompt content for tracker types', () => {
-      const beadsPrompt = getBundledPrompt('beads');
-      const jsonPrompt = getBundledPrompt('json');
-
-      expect(beadsPrompt.length).toBeGreaterThan(0);
-      expect(jsonPrompt.length).toBeGreaterThan(0);
-    });
-
-    test('beads and beads-bv return same prompt', () => {
-      expect(getBundledPrompt('beads')).toBe(getBundledPrompt('beads-bv'));
-    });
-  });
 });
 
 // ============================================================================
@@ -636,17 +594,6 @@ describe('Template Engine - Installation', () => {
     });
   });
 
-  describe('initializeUserPrompts', () => {
-    test('initializes legacy prompt files', () => {
-      // This function creates prompt.md and prompt-beads.md
-      const result = initializeUserPrompts(false);
-
-      expect(result.results.length).toBe(2);
-      const files = result.results.map((r) => r.file);
-      expect(files).toContain('prompt.md');
-      expect(files).toContain('prompt-beads.md');
-    });
-  });
 });
 
 // Helper function to test installGlobalTemplates with custom directory
@@ -760,10 +707,9 @@ describe('Template Engine - Rendering', () => {
       const result = renderPrompt(task, config, undefined, extended);
 
       expect(result.success).toBe(true);
-      // PRD info should be rendered
-      expect(result.prompt).toContain('Feature PRD');
-      expect(result.prompt).toContain('5');
-      expect(result.prompt).toContain('10');
+      // PRD content and recent progress should be rendered
+      expect(result.prompt).toContain('Full PRD content here');
+      expect(result.prompt).toContain('Did stuff');
     });
 
     test('handles Handlebars conditionals with custom template', async () => {
