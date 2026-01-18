@@ -53,7 +53,22 @@ jobs:
       - name: Run tests with coverage
         run: |
           set -o pipefail
-          bun test --coverage --coverage-reporter=lcov --coverage-reporter=text 2>&1 | tee coverage-output.txt
+          # Run tests in batches to avoid mock.module() conflicts between test files
+          # tests/ directory contains most tests and runs cleanly
+          # src/ command tests with mocks are run individually to prevent cross-file pollution
+          {
+            bun test tests/ --coverage --coverage-reporter=text --coverage-reporter=lcov
+            bun test src/commands/doctor.test.ts --coverage --coverage-reporter=text
+            bun test src/commands/info.test.ts --coverage --coverage-reporter=text
+            bun test src/commands/skills.test.ts --coverage --coverage-reporter=text
+            bun test src/config/ --coverage --coverage-reporter=text
+            bun test src/engine/ --coverage --coverage-reporter=text
+            bun test src/plugins/ --coverage --coverage-reporter=text
+            bun test src/sandbox/ --coverage --coverage-reporter=text
+            bun test src/setup/ --coverage --coverage-reporter=text
+            bun test src/templates/ --coverage --coverage-reporter=text
+            bun test src/tui/ --coverage --coverage-reporter=text
+          } 2>&1 | tee coverage-output.txt
 
       - name: Check coverage threshold
         run: |

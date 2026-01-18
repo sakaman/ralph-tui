@@ -2,14 +2,18 @@
  * ABOUTME: Tests for the skills command CLI interface.
  * Tests the list and install subcommands for managing agent skills.
  * Supports multi-agent skill installation (Claude Code, OpenCode, Factory Droid).
+ *
+ * NOTE: These tests are designed to work both:
+ * - In environments with real agents installed (full testing)
+ * - In CI environments without agents (graceful degradation)
  */
 
 import { describe, expect, test, beforeEach, afterEach, spyOn, mock } from 'bun:test';
 
-// Restore any mocks before tests run to prevent mock leakage
+// Restore any mocks from other test files to prevent pollution
 mock.restore();
 
-// Import the command functions
+// Import the command functions - these use the real agent registry
 import { executeSkillsCommand, printSkillsHelp } from './skills.js';
 import { listBundledSkills } from '../setup/skill-installer.js';
 
