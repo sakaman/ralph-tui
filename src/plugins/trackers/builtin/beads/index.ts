@@ -6,7 +6,8 @@
 
 import { spawn } from 'node:child_process';
 import { access, constants, readFileSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { readFile } from 'node:fs/promises';
+import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { BaseTrackerPlugin } from '../../base.js';
 import type {
@@ -51,6 +52,7 @@ interface BeadJson {
     status: string;
     dependency_type: 'blocks' | 'parent-child';
   }>;
+  external_ref?: string;
 }
 
 /**
@@ -698,6 +700,75 @@ export class BeadsTrackerPlugin extends BaseTrackerPlugin {
 When finished, signal completion with:
 <promise>COMPLETE</promise>
 `;
+    }
+  }
+
+  /**
+   * Get PRD context for template rendering.
+   * Checks current task's external_ref, falls back to parent epic.
+   */
+  async getPrdContext(): Promise<{
+    name: string;
+    description?: string;
+    content: string;
+    completedCount: number;
+    totalCount: number;
+  } | null> {
+    // Need current task context - get from epicId or return null
+    const epicId = this.epicId;
+    if (!epicId) {
+      return null;
+    }
+
+    try {
+      // Get epic to find external_ref with PRD link
+      const epicResult = await execBd(['show', epicId, '--json'], this.workingDir);
+      if (epicResult.exitCode !== 0) {
+        return null;
+      }
+
+      const epic = JSON.parse(epicResult.stdout) as BeadJson;
+      const externalRef = epic.external_ref;
+
+      if (!externalRef || !externalRef.startsWith('prd:')) {
+        return null;
+      }
+
+      // Parse path from "prd:./path/to/file.md"
+      const prdPath = externalRef.substring(4); // Remove "prd:" prefix
+      const fullPath = prdPath.startsWith('/')
+        ? prdPath
+        : resolve(this.workingDir, prdPath);
+
+      // Read PRD content
+      const content = await readFile(fullPath, 'utf-8');
+
+      // Get completion stats from epic children
+      const childrenResult = await execBd(
+        ['list', '--json', '--parent', epicId],
+        this.workingDir
+      );
+
+      let completedCount = 0;
+      let totalCount = 0;
+
+      if (childrenResult.exitCode === 0) {
+        const children = JSON.parse(childrenResult.stdout) as BeadJson[];
+        totalCount = children.length;
+        completedCount = children.filter(
+          (c) => c.status === 'closed' || c.status === 'cancelled'
+        ).length;
+      }
+
+      return {
+        name: epic.title,
+        description: epic.description,
+        content,
+        completedCount,
+        totalCount,
+      };
+    } catch {
+      return null;
     }
   }
 }

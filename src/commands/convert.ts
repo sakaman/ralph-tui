@@ -4,7 +4,7 @@
  */
 
 import { readFile, writeFile, access, constants, mkdir } from 'node:fs/promises';
-import { resolve, dirname } from 'node:path';
+import { resolve, dirname, relative } from 'node:path';
 import { spawn } from 'node:child_process';
 import {
   parsePrdMarkdown,
@@ -232,7 +232,8 @@ interface BeadsConversionResult {
 async function convertToBeads(
   parsed: import('../prd/parser.js').ParsedPrd,
   labels: string[],
-  verbose: boolean
+  verbose: boolean,
+  prdPath?: string
 ): Promise<BeadsConversionResult> {
   const storyIds: string[] = [];
 
@@ -251,6 +252,11 @@ async function convertToBeads(
     '--priority', '1',
     '--silent',
   ];
+
+  // Include PRD link if available
+  if (prdPath) {
+    epicArgs.splice(-1, 0, '--external-ref', `prd:${prdPath}`);
+  }
 
   if (verbose) {
     console.log(`  bd ${epicArgs.join(' ')}`);
@@ -295,6 +301,11 @@ async function convertToBeads(
       '--parent', epicId,
       '--silent',
     ];
+
+    // Include PRD link if available
+    if (prdPath) {
+      storyArgs.splice(-1, 0, '--external-ref', `prd:${prdPath}`);
+    }
 
     if (verbose) {
       console.log(`  bd ${storyArgs.join(' ')}`);
@@ -448,9 +459,9 @@ export async function executeConvertCommand(args: string[]): Promise<void> {
 
   // Branch to format-specific handling
   if (to === 'beads') {
-    await executeBeadsConversion(parsed, labels || [], verbose ?? false);
+    await executeBeadsConversion(parsed, labels || [], verbose ?? false, input);
   } else {
-    await executeJsonConversion(parsed, output, branch, force ?? false);
+    await executeJsonConversion(parsed, output, branch, force ?? false, inputPath);
   }
 }
 
@@ -461,7 +472,8 @@ async function executeJsonConversion(
   parsed: import('../prd/parser.js').ParsedPrd,
   output: string | undefined,
   branch: string | undefined,
-  force: boolean
+  force: boolean,
+  inputPath: string
 ): Promise<void> {
   // Prompt for branch name if not provided
   let branchName = branch || parsed.branchName;
@@ -503,7 +515,12 @@ async function executeJsonConversion(
   }
 
   const generatedPrd = parsedPrdToGeneratedPrd(parsed, branchName);
-  const prdJson = convertToPrdJson(generatedPrd);
+
+  // Compute relative path from output directory to input PRD
+  const outputDir = dirname(outputPath);
+  const sourcePrdPath = relative(outputDir, inputPath);
+
+  const prdJson = convertToPrdJson(generatedPrd, sourcePrdPath);
 
   try {
     validatePrdJsonSchema(prdJson, outputPath);
@@ -519,7 +536,6 @@ async function executeJsonConversion(
     throw err;
   }
 
-  const outputDir = dirname(outputPath);
   try {
     await mkdir(outputDir, { recursive: true });
   } catch {
@@ -555,7 +571,8 @@ async function executeJsonConversion(
 async function executeBeadsConversion(
   parsed: import('../prd/parser.js').ParsedPrd,
   labels: string[],
-  verbose: boolean
+  verbose: boolean,
+  prdPath?: string
 ): Promise<void> {
   // Check that beads is available
   const { exitCode, stderr } = await execBd(['--version']);
@@ -567,7 +584,7 @@ async function executeBeadsConversion(
 
   // Perform the conversion
   console.log();
-  const result = await convertToBeads(parsed, labels, verbose);
+  const result = await convertToBeads(parsed, labels, verbose, prdPath);
 
   if (!result.success) {
     printError(result.error || 'Conversion failed');
