@@ -8,7 +8,7 @@
 
 **AI Agent Loop Orchestrator** - A terminal UI for orchestrating AI coding agents to work through task lists autonomously.
 
-Ralph TUI connects your AI coding assistant (Claude Code, OpenCode, Factory Droid) to your task tracker and runs them in an autonomous loop, completing tasks one-by-one with intelligent selection, error handling, and full visibility.
+Ralph TUI connects your AI coding assistant (Claude Code, OpenCode, Factory Droid, Gemini CLI, Codex, Kiro CLI) to your task tracker and runs them in an autonomous loop, completing tasks one-by-one with intelligent selection, error handling, and full visibility.
 
 ![Ralph TUI Screenshot](docs/images/ralph-tui.png)
 
@@ -67,7 +67,7 @@ Ralph selects the highest-priority task, builds a prompt, executes your AI agent
 ## Features
 
 - **Task Trackers**: prd.json (simple), Beads (git-backed with dependencies)
-- **AI Agents**: Claude Code, OpenCode
+- **AI Agents**: Claude Code, OpenCode, Factory Droid, Gemini CLI, Codex, Kiro CLI
 - **Session Persistence**: Pause anytime, resume later, survive crashes
 - **Real-time TUI**: Watch agent output, control execution with keyboard shortcuts
 - **Subagent Tracing**: See nested agent calls in real-time
@@ -175,6 +175,9 @@ After running `ralph-tui setup`, skills are installed to your agent's skills dir
 | Claude Code | `~/.claude/skills/` |
 | OpenCode | `~/.config/opencode/skills/` |
 | Factory Droid | `~/.factory/skills/` |
+| Gemini CLI | `~/.gemini/skills/` |
+| Codex | `~/.codex/skills/` |
+| Kiro CLI | `~/.kiro/skills/` |
 
 Use these slash commands in your agent:
 
