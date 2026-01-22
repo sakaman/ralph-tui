@@ -2,10 +2,15 @@
  * ABOUTME: Tests for the OpenCodeAgentPlugin.
  * Tests specific behaviors like model validation, setup questions, and agent types.
  * Also tests stdin input handling for Windows shell interpretation safety.
+ * Also tests buffer flushing on stream end for reliable JSONL parsing.
  */
 
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
-import { OpenCodeAgentPlugin } from '../../src/plugins/agents/builtin/opencode.js';
+import {
+  OpenCodeAgentPlugin,
+  createOpenCodeJsonlBuffer,
+  type JsonlBufferCallbacks,
+} from '../../src/plugins/agents/builtin/opencode.js';
 import type { AgentFileContext, AgentExecuteOptions } from '../../src/plugins/agents/types.js';
 
 /**
@@ -339,6 +344,198 @@ describe('OpenCodeAgentPlugin', () => {
       const stdinInput = testablePlugin.testGetStdinInput(prompt);
 
       expect(stdinInput).toBe(prompt);
+    });
+  });
+
+  describe('createOpenCodeJsonlBuffer (buffer flush on stream end)', () => {
+    test('flushes buffer on stream end when content has no trailing newline', () => {
+      const receivedMessages: Record<string, unknown>[] = [];
+
+      const buffer = createOpenCodeJsonlBuffer({
+        onJsonlMessage: (msg) => receivedMessages.push(msg),
+      });
+
+      // Push JSON line without trailing newline (partial chunk)
+      buffer.push('{"type":"text","content":"Hello"}');
+
+      // Nothing should be processed yet (no newline)
+      expect(receivedMessages.length).toBe(0);
+
+      // Flush the buffer (simulates stream end)
+      buffer.flush();
+
+      // Now the buffered content should have been processed
+      expect(receivedMessages.length).toBe(1);
+      expect(receivedMessages[0].content).toBe('Hello');
+    });
+
+    test('processes complete lines during streaming and flushes remainder on end', () => {
+      const receivedMessages: Record<string, unknown>[] = [];
+
+      const buffer = createOpenCodeJsonlBuffer({
+        onJsonlMessage: (msg) => receivedMessages.push(msg),
+      });
+
+      // Push first complete line
+      buffer.push('{"type":"text","id":1}\n');
+      expect(receivedMessages.length).toBe(1);
+      expect(receivedMessages[0].id).toBe(1);
+
+      // Push partial second line (no newline)
+      buffer.push('{"type":"text","id":2}');
+      expect(receivedMessages.length).toBe(1); // Still only 1
+
+      // Flush - should process the partial line
+      buffer.flush();
+      expect(receivedMessages.length).toBe(2);
+      expect(receivedMessages[1].id).toBe(2);
+    });
+
+    test('forwards JSONL messages to onJsonlMessage callback', () => {
+      const receivedMessages: Record<string, unknown>[] = [];
+
+      const buffer = createOpenCodeJsonlBuffer({
+        onJsonlMessage: (msg) => receivedMessages.push(msg),
+      });
+
+      // Push JSON line with newline
+      buffer.push('{"type":"tool_use","tool":"task"}\n');
+
+      expect(receivedMessages.length).toBe(1);
+      expect(receivedMessages[0].type).toBe('tool_use');
+      expect(receivedMessages[0].tool).toBe('task');
+    });
+
+    test('handles empty buffer on flush gracefully', () => {
+      let callbackCalled = false;
+
+      const buffer = createOpenCodeJsonlBuffer({
+        onJsonlMessage: () => {
+          callbackCalled = true;
+        },
+      });
+
+      // Flush without any data
+      buffer.flush();
+
+      // No callback should be called for empty buffer
+      expect(callbackCalled).toBe(false);
+    });
+
+    test('handles multiple partial chunks that combine into complete line', () => {
+      const receivedMessages: Record<string, unknown>[] = [];
+
+      const buffer = createOpenCodeJsonlBuffer({
+        onJsonlMessage: (msg) => receivedMessages.push(msg),
+      });
+
+      // Simulate chunked arrival of a single JSON line
+      buffer.push('{"type":');
+      expect(receivedMessages.length).toBe(0);
+
+      buffer.push('"text","content":');
+      expect(receivedMessages.length).toBe(0);
+
+      buffer.push('"Hello"}\n');
+      expect(receivedMessages.length).toBe(1);
+      expect(receivedMessages[0].content).toBe('Hello');
+    });
+
+    test('skips invalid JSON gracefully', () => {
+      const receivedMessages: Record<string, unknown>[] = [];
+
+      const buffer = createOpenCodeJsonlBuffer({
+        onJsonlMessage: (msg) => receivedMessages.push(msg),
+      });
+
+      // Send invalid JSON
+      buffer.push('not valid json\n');
+      expect(receivedMessages.length).toBe(0);
+
+      // Send valid JSON after
+      buffer.push('{"type":"text","valid":true}\n');
+      expect(receivedMessages.length).toBe(1);
+      expect(receivedMessages[0].valid).toBe(true);
+    });
+
+    test('handles multiple complete lines in single chunk', () => {
+      const receivedMessages: Record<string, unknown>[] = [];
+
+      const buffer = createOpenCodeJsonlBuffer({
+        onJsonlMessage: (msg) => receivedMessages.push(msg),
+      });
+
+      // Send multiple lines at once
+      buffer.push(
+        '{"type":"text","id":1}\n' +
+          '{"type":"text","id":2}\n' +
+          '{"type":"text","id":3}\n'
+      );
+
+      expect(receivedMessages.length).toBe(3);
+      expect(receivedMessages[0].id).toBe(1);
+      expect(receivedMessages[1].id).toBe(2);
+      expect(receivedMessages[2].id).toBe(3);
+    });
+
+    test('calls onDisplayEvents for valid OpenCode JSON', () => {
+      const displayEventCalls: unknown[][] = [];
+
+      const buffer = createOpenCodeJsonlBuffer({
+        onDisplayEvents: (events) => displayEventCalls.push(events),
+      });
+
+      // Send OpenCode-format JSON with text content
+      buffer.push('{"type":"text","part":{"text":"Hello world"}}\n');
+
+      // Should have triggered display events callback
+      expect(displayEventCalls.length).toBe(1);
+      expect(displayEventCalls[0].length).toBeGreaterThan(0);
+    });
+
+    test('flushes display events on stream end', () => {
+      const displayEventCalls: unknown[][] = [];
+
+      const buffer = createOpenCodeJsonlBuffer({
+        onDisplayEvents: (events) => displayEventCalls.push(events),
+      });
+
+      // Send OpenCode-format JSON without trailing newline
+      buffer.push('{"type":"text","part":{"text":"Final message"}}');
+      expect(displayEventCalls.length).toBe(0);
+
+      // Flush should process it
+      buffer.flush();
+      expect(displayEventCalls.length).toBe(1);
+    });
+
+    test('ignores empty lines', () => {
+      const receivedMessages: Record<string, unknown>[] = [];
+
+      const buffer = createOpenCodeJsonlBuffer({
+        onJsonlMessage: (msg) => receivedMessages.push(msg),
+      });
+
+      // Send lines with empty lines between
+      buffer.push('{"id":1}\n\n\n{"id":2}\n');
+
+      expect(receivedMessages.length).toBe(2);
+      expect(receivedMessages[0].id).toBe(1);
+      expect(receivedMessages[1].id).toBe(2);
+    });
+
+    test('trims whitespace from lines before processing', () => {
+      const receivedMessages: Record<string, unknown>[] = [];
+
+      const buffer = createOpenCodeJsonlBuffer({
+        onJsonlMessage: (msg) => receivedMessages.push(msg),
+      });
+
+      // Send line with leading/trailing whitespace
+      buffer.push('  {"type":"text"}  \n');
+
+      expect(receivedMessages.length).toBe(1);
+      expect(receivedMessages[0].type).toBe('text');
     });
   });
 });

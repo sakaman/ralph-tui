@@ -19,6 +19,84 @@ import type {
 } from '../types.js';
 
 /**
+ * Callbacks for the JSONL streaming buffer.
+ */
+export interface JsonlBufferCallbacks {
+  /** Called when a JSONL message is parsed (for subagent tracing) */
+  onJsonlMessage?: (message: Record<string, unknown>) => void;
+  /** Called with formatted display events */
+  onDisplayEvents?: (events: AgentDisplayEvent[]) => void;
+}
+
+/**
+ * State object for JSONL streaming buffer.
+ * Accumulates partial data and emits complete lines.
+ */
+export interface JsonlStreamingBuffer {
+  /** Push new data into the buffer, processing any complete lines */
+  push: (data: string) => void;
+  /** Flush any remaining buffered content (call on stream end) */
+  flush: () => void;
+}
+
+/**
+ * Create a streaming buffer for OpenCode JSONL output.
+ * Handles partial chunks and emits complete lines for processing.
+ *
+ * This is exported for testability - the execute() method uses this internally.
+ */
+export function createOpenCodeJsonlBuffer(
+  callbacks: JsonlBufferCallbacks
+): JsonlStreamingBuffer {
+  let buffer = '';
+
+  const processLine = (line: string): void => {
+    const trimmed = line.trim();
+    if (!trimmed) return;
+
+    // Parse raw JSONL lines and forward to onJsonlMessage for subagent tracing
+    if (callbacks.onJsonlMessage && trimmed.startsWith('{')) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        callbacks.onJsonlMessage(parsed);
+      } catch {
+        // Not valid JSON, skip
+      }
+    }
+
+    // Process for display events
+    const events = parseOpenCodeJsonLine(trimmed);
+    if (events.length > 0 && callbacks.onDisplayEvents) {
+      callbacks.onDisplayEvents(events);
+    }
+  };
+
+  return {
+    push: (data: string): void => {
+      buffer += data;
+
+      // If no newline, wait for more data
+      if (!buffer.includes('\n')) return;
+
+      const lines = buffer.split('\n');
+      buffer = lines.pop() ?? ''; // Keep the last partial line in buffer
+
+      for (const line of lines) {
+        processLine(line);
+      }
+    },
+
+    flush: (): void => {
+      // Process any remaining content that didn't end with a newline
+      if (buffer.length > 0) {
+        processLine(buffer);
+        buffer = '';
+      }
+    },
+  };
+}
+
+/**
  * Parse opencode JSON line into standardized display events.
  * Returns AgentDisplayEvent[] - the shared processAgentEvents decides what to show.
  *
@@ -378,28 +456,10 @@ export class OpenCodeAgentPlugin extends BaseAgentPlugin {
     files?: AgentFileContext[],
     options?: AgentExecuteOptions
   ): AgentExecutionHandle {
-    let buffer = '';
-
-    // Helper to process a single JSONL line
-    const processLine = (line: string): void => {
-      const trimmed = line.trim();
-      if (!trimmed) return;
-
-      // Parse raw JSONL lines and forward to onJsonlMessage for subagent tracing
-      if (options?.onJsonlMessage) {
-        if (trimmed.startsWith('{')) {
-          try {
-            const parsed = JSON.parse(trimmed);
-            options.onJsonlMessage(parsed);
-          } catch {
-            // Not valid JSON, skip
-          }
-        }
-      }
-
-      // Process for display events
-      const events = parseOpenCodeJsonLine(trimmed);
-      if (events.length > 0) {
+    // Create streaming buffer with callbacks for display and tracing
+    const streamingBuffer = createOpenCodeJsonlBuffer({
+      onJsonlMessage: options?.onJsonlMessage,
+      onDisplayEvents: (events) => {
         // Call TUI-native segments callback if provided
         if (options?.onStdoutSegments) {
           const segments = processAgentEventsToSegments(events);
@@ -414,34 +474,19 @@ export class OpenCodeAgentPlugin extends BaseAgentPlugin {
             options.onStdout(parsed);
           }
         }
-      }
-    };
+      },
+    });
 
     // Wrap callbacks to parse JSON events
     const parsedOptions: AgentExecuteOptions = {
       ...options,
       onStdout: (options?.onStdout || options?.onStdoutSegments || options?.onJsonlMessage)
-        ? (data: string) => {
-            buffer += data;
-
-            // If no newline, wait for more data
-            if (!buffer.includes('\n')) return;
-
-            const lines = buffer.split('\n');
-            buffer = lines.pop() ?? ''; // Keep the last partial line (or empty string) in buffer
-
-            for (const line of lines) {
-              processLine(line);
-            }
-          }
+        ? (data: string) => streamingBuffer.push(data)
         : undefined,
       // Wrap onEnd to flush any remaining buffered content
       onEnd: (result) => {
-        // Flush buffer: process any remaining content that didn't end with a newline
-        if (buffer.length > 0) {
-          processLine(buffer);
-          buffer = '';
-        }
+        // Flush buffer before calling original onEnd
+        streamingBuffer.flush();
         // Call the original onEnd if provided
         options?.onEnd?.(result);
       },
