@@ -599,7 +599,10 @@ async function executeBeadsConversion(
     if (typeof configLabels === 'string') {
       labels = configLabels.split(',').map((l) => l.trim()).filter(Boolean);
     } else if (Array.isArray(configLabels)) {
-      labels = configLabels.filter((l): l is string => typeof l === 'string');
+      labels = configLabels
+        .filter((l): l is string => typeof l === 'string')
+        .map((l) => l.trim())
+        .filter(Boolean);
     }
   }
 
