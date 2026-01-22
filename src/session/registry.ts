@@ -139,8 +139,14 @@ async function acquireLock(): Promise<FileHandle> {
           // Lock timeout - force remove stale lock and retry
           try {
             await unlink(lockPath);
-          } catch {
-            // Ignore unlink errors
+          } catch (unlinkError) {
+            // ENOENT is fine (lock was already removed by another process)
+            // Any other error means we can't remove the lock - bail out
+            if ((unlinkError as NodeJS.ErrnoException).code !== 'ENOENT') {
+              throw new Error(
+                `Failed to remove stale lock file at ${lockPath}: ${(unlinkError as Error).message}`
+              );
+            }
           }
           continue;
         }
@@ -180,8 +186,13 @@ async function loadRegistryInternal(): Promise<SessionRegistry> {
     const content = await readFile(registryPath, 'utf-8');
     const parsed = JSON.parse(content) as SessionRegistry;
 
-    // Validate structure
-    if (parsed.version !== 1 || typeof parsed.sessions !== 'object') {
+    // Validate structure: sessions must be a plain, non-null object (not an array)
+    if (
+      parsed.version !== 1 ||
+      !parsed.sessions ||
+      typeof parsed.sessions !== 'object' ||
+      Array.isArray(parsed.sessions)
+    ) {
       return { version: 1, sessions: {} };
     }
 
@@ -359,19 +370,49 @@ export async function listAllSessions(): Promise<SessionRegistryEntry[]> {
 }
 
 /**
- * Clean up stale sessions from the registry
- * Removes entries for sessions that no longer have a session file
+ * Clean up stale sessions from the registry.
+ * Removes entries for sessions that no longer have a session file.
+ *
+ * Uses a two-phase approach to avoid holding the lock during potentially
+ * slow I/O checks: snapshots entries under lock, runs checks without lock,
+ * then reacquires lock to delete stale entries (with race-safety checks).
  */
 export async function cleanupStaleRegistryEntries(
   checkSessionExists: (cwd: string) => Promise<boolean>
 ): Promise<number> {
-  let cleaned = 0;
+  // Phase 1: Snapshot registry entries under lock
+  const snapshot: Array<{ sessionId: string; cwd: string }> = [];
+  const registry = await loadRegistry();
+  for (const [sessionId, entry] of Object.entries(registry.sessions)) {
+    snapshot.push({ sessionId, cwd: entry.cwd });
+  }
 
-  await withRegistryLock(async (registry) => {
-    for (const [sessionId, entry] of Object.entries(registry.sessions)) {
-      const exists = await checkSessionExists(entry.cwd);
-      if (!exists) {
-        delete registry.sessions[sessionId];
+  if (snapshot.length === 0) {
+    return 0;
+  }
+
+  // Phase 2: Check each session without holding the lock
+  const staleIds: string[] = [];
+  for (const { sessionId, cwd } of snapshot) {
+    const exists = await checkSessionExists(cwd);
+    if (!exists) {
+      staleIds.push(sessionId);
+    }
+  }
+
+  if (staleIds.length === 0) {
+    return 0;
+  }
+
+  // Phase 3: Reacquire lock and delete stale entries (with race-safety)
+  let cleaned = 0;
+  await withRegistryLock((currentRegistry) => {
+    for (const sessionId of staleIds) {
+      const entry = currentRegistry.sessions[sessionId];
+      // Only delete if the entry still exists and cwd hasn't changed (race safety)
+      const originalCwd = snapshot.find(s => s.sessionId === sessionId)?.cwd;
+      if (entry && entry.cwd === originalCwd) {
+        delete currentRegistry.sessions[sessionId];
         cleaned++;
       }
     }

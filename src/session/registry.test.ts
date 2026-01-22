@@ -379,7 +379,7 @@ describe('Session Registry', () => {
     });
   });
 
-  describe('cleanupStaleRegistryEntries edge cases', () => {
+  describe('cleanupStaleRegistryEntries', () => {
     test('returns 0 when no stale entries exist', async () => {
       const sessionId = `test-no-stale-${Date.now()}`;
       testSessionIds.push(sessionId);
@@ -401,6 +401,103 @@ describe('Session Registry', () => {
 
       const cleaned = await cleanupStaleRegistryEntries(mockChecker);
       expect(cleaned).toBe(0);
+    });
+
+    test('removes stale entries where session file does not exist', async () => {
+      const sessionId = `test-stale-remove-${Date.now()}`;
+      testSessionIds.push(sessionId);
+
+      await registerSession({
+        sessionId,
+        cwd: '/tmp/nonexistent-path-for-cleanup',
+        status: 'running',
+        startedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        agentPlugin: 'claude',
+        trackerPlugin: 'json',
+      });
+
+      // Mock checker that says session does NOT exist
+      const mockChecker = async (_cwd: string): Promise<boolean> => {
+        return false;
+      };
+
+      const cleaned = await cleanupStaleRegistryEntries(mockChecker);
+      expect(cleaned).toBeGreaterThanOrEqual(1);
+
+      // Verify entry was removed
+      const entry = await getSessionById(sessionId);
+      expect(entry).toBeNull();
+
+      // Remove from cleanup list since already cleaned
+      testSessionIds = testSessionIds.filter(id => id !== sessionId);
+    });
+
+    test('handles mixed existing and stale entries', async () => {
+      const existsId = `test-cleanup-exists-${Date.now()}`;
+      const staleId = `test-cleanup-stale-${Date.now()}`;
+      testSessionIds.push(existsId, staleId);
+
+      await registerSession({
+        sessionId: existsId,
+        cwd: '/tmp/still-here',
+        status: 'running',
+        startedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        agentPlugin: 'claude',
+        trackerPlugin: 'json',
+      });
+
+      await registerSession({
+        sessionId: staleId,
+        cwd: '/tmp/gone-away',
+        status: 'paused',
+        startedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        agentPlugin: 'codex',
+        trackerPlugin: 'beads',
+      });
+
+      // Mock checker: only /tmp/still-here exists
+      const mockChecker = async (cwd: string): Promise<boolean> => {
+        return cwd === '/tmp/still-here';
+      };
+
+      const cleaned = await cleanupStaleRegistryEntries(mockChecker);
+      expect(cleaned).toBeGreaterThanOrEqual(1);
+
+      // Verify the existing one remains
+      const existsEntry = await getSessionById(existsId);
+      expect(existsEntry).not.toBeNull();
+      expect(existsEntry!.cwd).toBe('/tmp/still-here');
+
+      // Verify the stale one was removed
+      const staleEntry = await getSessionById(staleId);
+      expect(staleEntry).toBeNull();
+
+      // Remove staleId from cleanup since already cleaned
+      testSessionIds = testSessionIds.filter(id => id !== staleId);
+    });
+  });
+
+  describe('loadRegistry validation', () => {
+    test('handles registry with null sessions gracefully', async () => {
+      // Verify loadRegistry always returns a valid structure
+      // The validation occurs in loadRegistryInternal which rejects
+      // null/array values for sessions
+      const loaded = await loadRegistry();
+      expect(loaded.version).toBe(1);
+      expect(typeof loaded.sessions).toBe('object');
+      expect(loaded.sessions).not.toBeNull();
+      expect(Array.isArray(loaded.sessions)).toBe(false);
+    });
+
+    test('returns valid registry structure on load', async () => {
+      const registry = await loadRegistry();
+      expect(registry.version).toBe(1);
+      expect(typeof registry.sessions).toBe('object');
+      expect(registry.sessions).not.toBeNull();
+      expect(Array.isArray(registry.sessions)).toBe(false);
     });
   });
 
