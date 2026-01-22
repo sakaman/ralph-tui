@@ -99,6 +99,7 @@ interface RunningExecution {
   resolve: (result: AgentExecutionResult) => void;
   reject: (error: Error) => void;
   timeoutId?: ReturnType<typeof setTimeout>;
+  options?: AgentExecuteOptions;
 }
 
 /**
@@ -320,6 +321,7 @@ export abstract class BaseAgentPlugin implements AgentPlugin {
         interrupted: false,
         resolve: resolvePromise!,
         reject: rejectPromise!,
+        options,
       };
 
       this.executions.set(executionId, execution);
@@ -433,9 +435,9 @@ export abstract class BaseAgentPlugin implements AgentPlugin {
       })
       .catch((error: Error) => {
         const endedAt = new Date();
-        resolvePromise!({
+        const result = {
           executionId,
-          status: 'failed',
+          status: 'failed' as const,
           exitCode: undefined,
           stdout: '',
           stderr: error.message,
@@ -444,7 +446,21 @@ export abstract class BaseAgentPlugin implements AgentPlugin {
           interrupted: false,
           startedAt: startedAt.toISOString(),
           endedAt: endedAt.toISOString(),
-        });
+        };
+
+        // Call onEnd lifecycle hook before resolving (same pattern as completeExecution)
+        if (options?.onEnd) {
+          try {
+            options.onEnd(result);
+          } catch (err) {
+            if (process.env.RALPH_DEBUG) {
+              debugLog(`[DEBUG] onEnd hook threw error: ${err instanceof Error ? err.message : String(err)}`);
+            }
+            // Swallow error - always proceed to resolve
+          }
+        }
+
+        resolvePromise!(result);
       });
 
     // Return the handle
@@ -508,6 +524,20 @@ export abstract class BaseAgentPlugin implements AgentPlugin {
     this.executions.delete(executionId);
     if (this.currentExecutionId === executionId) {
       this.currentExecutionId = undefined;
+    }
+
+    // Call onEnd lifecycle hook before resolving
+    // This allows plugins to flush buffers or perform cleanup
+    // Wrap in try/catch so exceptions don't prevent resolution
+    if (execution.options?.onEnd) {
+      try {
+        execution.options.onEnd(result);
+      } catch (err) {
+        if (process.env.RALPH_DEBUG) {
+          debugLog(`[DEBUG] onEnd hook threw error: ${err instanceof Error ? err.message : String(err)}`);
+        }
+        // Swallow error - always proceed to resolve
+      }
     }
 
     // Resolve the promise

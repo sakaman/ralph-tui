@@ -79,7 +79,7 @@ src/
 ├── interruption/     # Signal handling
 ├── logs/             # Iteration logging
 ├── plugins/
-│   ├── agents/       # Agent plugins (claude, opencode)
+│   ├── agents/       # Agent plugins (claude, opencode, gemini, codex, kiro)
 │   └── trackers/     # Tracker plugins (beads, json)
 ├── session/          # Session management
 ├── setup/            # Interactive setup wizard
