@@ -57,6 +57,330 @@ function isDroidAgent(agentPlugin?: string): boolean {
   return agentPlugin?.toLowerCase().includes('droid') ?? false;
 }
 
+function isOpenCodeAgent(agentPlugin?: string): boolean {
+  return agentPlugin?.toLowerCase() === 'opencode';
+}
+
+function isGeminiAgent(agentPlugin?: string): boolean {
+  return agentPlugin?.toLowerCase() === 'gemini';
+}
+
+function isCodexAgent(agentPlugin?: string): boolean {
+  return agentPlugin?.toLowerCase() === 'codex';
+}
+
+/**
+ * Structure of an OpenCode JSONL event.
+ */
+interface OpenCodeEvent {
+  type: 'text' | 'tool_use' | 'tool_result' | 'step_start' | 'step_finish' | 'error';
+  part?: {
+    text?: string;
+    tool?: string;
+    name?: string;
+    state?: {
+      input?: Record<string, unknown>;
+      isError?: boolean;
+      is_error?: boolean;
+      error?: string;
+      content?: string;
+    };
+  };
+  error?: {
+    message?: string;
+  };
+}
+
+/**
+ * Structure of a Gemini CLI JSONL event.
+ * Gemini CLI uses --output-format stream-json which emits events like:
+ * - init: session initialization
+ * - message: text from user (role=user) or assistant (role=assistant)
+ * - tool_use: tool being called
+ * - tool_result: tool execution result
+ * - result: final stats (not content)
+ * - error: error event
+ */
+interface GeminiEvent {
+  type: 'init' | 'message' | 'tool_use' | 'tool_result' | 'result' | 'error';
+  role?: 'user' | 'assistant';
+  content?: string;
+  name?: string;
+  tool_name?: string;
+  tool_id?: string;
+  arguments?: unknown;
+  args?: unknown;
+  input?: unknown;
+  parameters?: unknown;
+  is_error?: boolean;
+  error?: unknown;
+  status?: string;
+  stats?: {
+    total_tokens?: number;
+    input_tokens?: number;
+    output_tokens?: number;
+  };
+}
+
+/**
+ * Parse a Gemini CLI JSONL line and return the parsed event if valid.
+ */
+function parseGeminiJsonlLine(line: string): { success: boolean; event?: GeminiEvent } {
+  if (!line.trim() || !line.startsWith('{')) {
+    return { success: false };
+  }
+
+  try {
+    const parsed = JSON.parse(line) as GeminiEvent;
+    // Check if it looks like a Gemini event (has type field with known values)
+    if (parsed.type && ['init', 'message', 'tool_use', 'tool_result', 'result', 'error'].includes(parsed.type)) {
+      return { success: true, event: parsed };
+    }
+    return { success: false };
+  } catch {
+    return { success: false };
+  }
+}
+
+/**
+ * Format a Gemini event for display.
+ * Returns undefined for events that shouldn't be displayed (like init, user messages, stats).
+ */
+function formatGeminiEventForDisplay(event: GeminiEvent): string | undefined {
+  switch (event.type) {
+    case 'message':
+      // Skip user messages (they echo the input prompt)
+      if (event.role === 'user') {
+        return undefined;
+      }
+      // Assistant message - the main content we want to display
+      if (event.role === 'assistant' && event.content) {
+        return event.content;
+      }
+      break;
+
+    case 'tool_use': {
+      // Tool being called
+      const toolName = event.tool_name || event.name || 'unknown';
+      const input = event.parameters || event.arguments || event.args || event.input;
+      if (input && typeof input === 'object') {
+        // Show tool name and key input details
+        const inputStr = Object.entries(input as Record<string, unknown>)
+          .slice(0, 2)
+          .map(([k, v]) => `${k}=${typeof v === 'string' ? v.slice(0, 50) : '...'}`)
+          .join(', ');
+        return `[Tool: ${toolName}] ${inputStr}`;
+      }
+      return `[Tool: ${toolName}]`;
+    }
+
+    case 'tool_result': {
+      // Tool completed - only show if error
+      if (event.is_error === true || event.status === 'error') {
+        const errorMsg = typeof event.error === 'string' ? event.error :
+                        typeof event.error === 'object' && event.error !== null && 'message' in event.error
+                          ? String((event.error as { message?: unknown }).message)
+                          : 'tool execution failed';
+        return `[Tool Error] ${errorMsg}`;
+      }
+      // Don't display successful tool results (too verbose)
+      return undefined;
+    }
+
+    case 'error': {
+      // Error from Gemini
+      const errorMsg = typeof event.error === 'string' ? event.error :
+                      typeof event.error === 'object' && event.error !== null && 'message' in event.error
+                        ? String((event.error as { message?: unknown }).message)
+                        : 'Unknown error';
+      return `Error: ${errorMsg}`;
+    }
+
+    case 'init':
+    case 'result':
+      // Skip init (session start) and result (stats) events
+      return undefined;
+  }
+
+  return undefined;
+}
+
+/**
+ * Structure of a Codex CLI JSONL event.
+ * Codex CLI uses --json which emits events like:
+ * - thread.started: session started
+ * - turn.started: turn started
+ * - item.started/item.completed: item events (agent_message, command_execution, file_*)
+ * - turn.completed: turn finished with usage stats
+ */
+interface CodexEvent {
+  type: 'thread.started' | 'turn.started' | 'item.started' | 'item.completed' | 'turn.completed' | 'error';
+  thread_id?: string;
+  item?: {
+    id?: string;
+    type?: 'agent_message' | 'command_execution' | 'todo_list' | 'file_edit' | 'file_write' | 'file_read';
+    text?: string;
+    command?: string;
+    exit_code?: number | null;
+    aggregated_output?: string;
+    status?: string;
+    file_path?: string;
+    path?: string;
+    items?: Array<{ text: string; completed: boolean }>;
+  };
+  usage?: {
+    input_tokens?: number;
+    output_tokens?: number;
+    cached_input_tokens?: number;
+  };
+  error?: unknown;
+}
+
+/**
+ * Parse a Codex CLI JSONL line and return the parsed event if valid.
+ */
+function parseCodexJsonlLine(line: string): { success: boolean; event?: CodexEvent } {
+  if (!line.trim() || !line.startsWith('{')) {
+    return { success: false };
+  }
+
+  try {
+    const parsed = JSON.parse(line) as CodexEvent;
+    // Check if it looks like a Codex event (has type field with known values)
+    if (parsed.type && ['thread.started', 'turn.started', 'item.started', 'item.completed', 'turn.completed', 'error'].includes(parsed.type)) {
+      return { success: true, event: parsed };
+    }
+    return { success: false };
+  } catch {
+    return { success: false };
+  }
+}
+
+/**
+ * Format a Codex event for display.
+ * Returns undefined for events that shouldn't be displayed (like thread/turn lifecycle).
+ */
+function formatCodexEventForDisplay(event: CodexEvent): string | undefined {
+  // Handle item events
+  if (event.type === 'item.completed' || event.type === 'item.started') {
+    const item = event.item;
+    if (!item) return undefined;
+
+    // Agent message - extract text
+    if (item.type === 'agent_message' && item.text) {
+      return item.text;
+    }
+
+    // Command execution
+    if (item.type === 'command_execution') {
+      if (event.type === 'item.started' && item.command) {
+        return `[Shell] ${item.command}`;
+      }
+      if (event.type === 'item.completed') {
+        const isError = item.exit_code !== 0 && item.exit_code !== null;
+        if (isError && item.aggregated_output) {
+          return `[Shell Error] ${item.aggregated_output.slice(0, 200)}`;
+        }
+      }
+      return undefined;
+    }
+
+    // File operations
+    if (item.type === 'file_edit' || item.type === 'file_write' || item.type === 'file_read') {
+      if (event.type === 'item.started') {
+        const filePath = item.file_path || item.path || 'unknown';
+        return `[${item.type}] ${filePath}`;
+      }
+      return undefined;
+    }
+  }
+
+  // Error events
+  if (event.type === 'error' && event.error) {
+    const errorMsg = typeof event.error === 'string' ? event.error :
+                    typeof event.error === 'object' && event.error !== null && 'message' in event.error
+                      ? String((event.error as { message?: unknown }).message)
+                      : 'Unknown error';
+    return `Error: ${errorMsg}`;
+  }
+
+  // Skip: thread.started, turn.started, turn.completed (no displayable content)
+  return undefined;
+}
+
+/**
+ * Parse an OpenCode JSONL line and return the parsed event if valid.
+ */
+function parseOpenCodeJsonlLine(line: string): { success: boolean; event?: OpenCodeEvent } {
+  if (!line.trim() || !line.startsWith('{')) {
+    return { success: false };
+  }
+
+  try {
+    const parsed = JSON.parse(line) as OpenCodeEvent;
+    // Check if it looks like an opencode event
+    if (parsed.type && ['text', 'tool_use', 'tool_result', 'step_start', 'step_finish', 'error'].includes(parsed.type)) {
+      return { success: true, event: parsed };
+    }
+    return { success: false };
+  } catch {
+    return { success: false };
+  }
+}
+
+/**
+ * Format an OpenCode event for display.
+ * Returns undefined for events that shouldn't be displayed (like step markers).
+ */
+function formatOpenCodeEventForDisplay(event: OpenCodeEvent): string | undefined {
+  switch (event.type) {
+    case 'text':
+      // Main text output from the LLM
+      if (event.part?.text) {
+        return event.part.text;
+      }
+      break;
+
+    case 'tool_use': {
+      // Tool being called - show name
+      const toolName = event.part?.tool || event.part?.name || 'unknown';
+      const input = event.part?.state?.input;
+      if (input) {
+        // Show tool name and key input details
+        const inputStr = Object.entries(input)
+          .slice(0, 2)
+          .map(([k, v]) => `${k}=${typeof v === 'string' ? v.slice(0, 50) : '...'}`)
+          .join(', ');
+        return `[Tool: ${toolName}] ${inputStr}`;
+      }
+      return `[Tool: ${toolName}]`;
+    }
+
+    case 'tool_result': {
+      // Tool completed - only show if error
+      const resultState = event.part?.state;
+      const isError = resultState?.isError === true || resultState?.is_error === true;
+      if (isError) {
+        const errorMsg = resultState?.error || resultState?.content || 'tool execution failed';
+        return `[Tool Error] ${errorMsg}`;
+      }
+      // Don't display successful tool results (too verbose)
+      return undefined;
+    }
+
+    case 'error':
+      // Error from opencode
+      return `Error: ${event.error?.message || 'Unknown error'}`;
+
+    case 'step_start':
+    case 'step_finish':
+      // Step markers - don't display
+      return undefined;
+  }
+
+  return undefined;
+}
+
 /**
  * Parse a JSONL line and extract any readable content.
  * Returns the extracted text or undefined if the line doesn't contain readable content.
@@ -124,6 +448,9 @@ export function parseAgentOutput(rawOutput: string, agentPlugin?: string): strin
   const parsedParts: string[] = [];
   const plainTextLines: string[] = [];
   const useDroidParser = isDroidAgent(agentPlugin);
+  const useOpenCodeParser = isOpenCodeAgent(agentPlugin);
+  const useGeminiParser = isGeminiAgent(agentPlugin);
+  const useCodexParser = isCodexAgent(agentPlugin);
   const droidCostAccumulator = useDroidParser ? new DroidCostAccumulator() : null;
   let hasJsonl = false;
 
@@ -140,6 +467,45 @@ export function parseAgentOutput(rawOutput: string, agentPlugin?: string): strin
           parsedParts.push(droidDisplay);
           continue;
         }
+      }
+    }
+
+    // OpenCode-specific parsing
+    if (useOpenCodeParser) {
+      const openCodeResult = parseOpenCodeJsonlLine(line);
+      if (openCodeResult.success && openCodeResult.event) {
+        hasJsonl = true;
+        const openCodeDisplay = formatOpenCodeEventForDisplay(openCodeResult.event);
+        if (openCodeDisplay !== undefined) {
+          parsedParts.push(openCodeDisplay);
+        }
+        continue; // Skip generic parsing for opencode events
+      }
+    }
+
+    // Codex CLI parsing
+    if (useCodexParser) {
+      const codexResult = parseCodexJsonlLine(line);
+      if (codexResult.success && codexResult.event) {
+        hasJsonl = true;
+        const codexDisplay = formatCodexEventForDisplay(codexResult.event);
+        if (codexDisplay !== undefined) {
+          parsedParts.push(codexDisplay);
+        }
+        continue; // Skip generic parsing for codex events
+      }
+    }
+
+    // Gemini CLI parsing
+    if (useGeminiParser) {
+      const geminiResult = parseGeminiJsonlLine(line);
+      if (geminiResult.success && geminiResult.event) {
+        hasJsonl = true;
+        const geminiDisplay = formatGeminiEventForDisplay(geminiResult.event);
+        if (geminiDisplay !== undefined) {
+          parsedParts.push(geminiDisplay);
+        }
+        continue; // Skip generic parsing for gemini events
       }
     }
 
@@ -226,10 +592,16 @@ export class StreamingOutputParser {
   private lastResultText = '';
   private lastCostSummary = '';
   private isDroid: boolean;
+  private isOpenCode: boolean;
+  private isGemini: boolean;
+  private isCodex: boolean;
   private droidCostAccumulator?: DroidCostAccumulator;
 
   constructor(options: StreamingOutputParserOptions = {}) {
     this.isDroid = isDroidAgent(options.agentPlugin);
+    this.isOpenCode = isOpenCodeAgent(options.agentPlugin);
+    this.isGemini = isGeminiAgent(options.agentPlugin);
+    this.isCodex = isCodexAgent(options.agentPlugin);
     if (this.isDroid) {
       this.droidCostAccumulator = new DroidCostAccumulator();
     }
@@ -242,6 +614,9 @@ export class StreamingOutputParser {
   setAgentPlugin(agentPlugin: string): void {
     const wasDroid = this.isDroid;
     this.isDroid = isDroidAgent(agentPlugin);
+    this.isOpenCode = isOpenCodeAgent(agentPlugin);
+    this.isGemini = isGeminiAgent(agentPlugin);
+    this.isCodex = isCodexAgent(agentPlugin);
     if (this.isDroid && !wasDroid) {
       this.droidCostAccumulator = new DroidCostAccumulator();
     }
@@ -353,6 +728,36 @@ export class StreamingOutputParser {
       }
     }
 
+    // OpenCode-specific parsing
+    if (this.isOpenCode) {
+      const openCodeResult = parseOpenCodeJsonlLine(trimmed);
+      if (openCodeResult.success && openCodeResult.event) {
+        const openCodeDisplay = formatOpenCodeEventForDisplay(openCodeResult.event);
+        // Return the display text or undefined (to skip system events)
+        return openCodeDisplay;
+      }
+    }
+
+    // Codex CLI parsing
+    if (this.isCodex) {
+      const codexResult = parseCodexJsonlLine(trimmed);
+      if (codexResult.success && codexResult.event) {
+        const codexDisplay = formatCodexEventForDisplay(codexResult.event);
+        // Return the display text or undefined (to skip lifecycle events)
+        return codexDisplay;
+      }
+    }
+
+    // Gemini CLI parsing
+    if (this.isGemini) {
+      const geminiResult = parseGeminiJsonlLine(trimmed);
+      if (geminiResult.success && geminiResult.event) {
+        const geminiDisplay = formatGeminiEventForDisplay(geminiResult.event);
+        // Return the display text or undefined (to skip init/stats events)
+        return geminiDisplay;
+      }
+    }
+
     // Not JSON - return as plain text if it's not just whitespace
     if (!trimmed.startsWith('{')) {
       return trimmed;
@@ -432,6 +837,66 @@ export class StreamingOutputParser {
           return segments.map(s => ({ ...s, text: stripAnsiCodes(s.text) }));
         }
         // Droid event was recognized but nothing to display
+        return [];
+      }
+    }
+
+    // OpenCode-specific segment extraction
+    if (this.isOpenCode) {
+      const openCodeResult = parseOpenCodeJsonlLine(trimmed);
+      if (openCodeResult.success && openCodeResult.event) {
+        const displayText = formatOpenCodeEventForDisplay(openCodeResult.event);
+        if (displayText) {
+          // Format tool calls with color
+          if (openCodeResult.event.type === 'tool_use') {
+            return [{ text: displayText, color: 'cyan' }];
+          }
+          if (openCodeResult.event.type === 'error') {
+            return [{ text: displayText, color: 'yellow' }];
+          }
+          return [{ text: displayText }];
+        }
+        // OpenCode event was recognized but nothing to display (system events)
+        return [];
+      }
+    }
+
+    // Codex CLI segment extraction
+    if (this.isCodex) {
+      const codexResult = parseCodexJsonlLine(trimmed);
+      if (codexResult.success && codexResult.event) {
+        const displayText = formatCodexEventForDisplay(codexResult.event);
+        if (displayText) {
+          // Format tool calls with color
+          if (codexResult.event.type === 'item.started' && codexResult.event.item?.type === 'command_execution') {
+            return [{ text: displayText, color: 'cyan' }];
+          }
+          if (codexResult.event.type === 'error') {
+            return [{ text: displayText, color: 'yellow' }];
+          }
+          return [{ text: displayText }];
+        }
+        // Codex event was recognized but nothing to display (lifecycle events)
+        return [];
+      }
+    }
+
+    // Gemini CLI segment extraction
+    if (this.isGemini) {
+      const geminiResult = parseGeminiJsonlLine(trimmed);
+      if (geminiResult.success && geminiResult.event) {
+        const displayText = formatGeminiEventForDisplay(geminiResult.event);
+        if (displayText) {
+          // Format tool calls with color
+          if (geminiResult.event.type === 'tool_use') {
+            return [{ text: displayText, color: 'cyan' }];
+          }
+          if (geminiResult.event.type === 'error') {
+            return [{ text: displayText, color: 'yellow' }];
+          }
+          return [{ text: displayText }];
+        }
+        // Gemini event was recognized but nothing to display (init/stats events)
         return [];
       }
     }

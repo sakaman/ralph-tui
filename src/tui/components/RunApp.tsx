@@ -1,6 +1,7 @@
 /**
  * ABOUTME: RunApp component for the Ralph TUI execution view.
  * Integrates with the execution engine to display real-time progress.
+ * US-5: Extended with connection resilience toast notifications.
  * Handles graceful interruption with confirmation dialog.
  */
 
@@ -25,6 +26,15 @@ import { SettingsView } from './SettingsView.js';
 import { EpicLoaderOverlay } from './EpicLoaderOverlay.js';
 import type { EpicLoaderMode } from './EpicLoaderOverlay.js';
 import { SubagentTreePanel } from './SubagentTreePanel.js';
+import { TabBar } from './TabBar.js';
+import { RemoteConfigView } from './RemoteConfigView.js';
+import type { RemoteConfigData } from './RemoteConfigView.js';
+import { RemoteManagementOverlay } from './RemoteManagementOverlay.js';
+import type { RemoteManagementMode, ExistingRemoteData } from './RemoteManagementOverlay.js';
+import { Toast, formatConnectionToast } from './Toast.js';
+import type { ConnectionToastMessage } from './Toast.js';
+import type { InstanceTab } from '../../remote/client.js';
+import { addRemote, removeRemote, getRemote } from '../../remote/config.js';
 import type {
   ExecutionEngine,
   EngineEvent,
@@ -51,6 +61,13 @@ import type { FormattedSegment } from '../../plugins/agents/output-formatting.js
  * Note: Task details are now shown inline in the RightPanel, not as a separate view
  */
 type ViewMode = 'tasks' | 'iterations' | 'iteration-detail';
+
+/**
+ * Focused pane for TAB-based navigation between panels.
+ * - 'output': RightPanel output view has keyboard focus (j/k scroll output)
+ * - 'subagentTree': SubagentTreePanel has keyboard focus (j/k select nodes)
+ */
+type FocusedPane = 'output' | 'subagentTree';
 
 /**
  * Props for the RunApp component
@@ -104,6 +121,25 @@ export interface RunAppProps {
   sandboxConfig?: SandboxConfig;
   /** Resolved sandbox mode (when mode is 'auto', this shows what it resolved to) */
   resolvedSandboxMode?: Exclude<SandboxMode, 'auto'>;
+  /** Instance tabs for remote navigation (local first, then remotes) */
+  instanceTabs?: InstanceTab[];
+  /** Currently selected instance tab index */
+  selectedTabIndex?: number;
+  /** Callback when a tab is selected */
+  onSelectTab?: (index: number) => void;
+  /** Connection toast to display (from InstanceManager) */
+  connectionToast?: ConnectionToastMessage | null;
+  /** Instance manager for remote data fetching */
+  instanceManager?: import('../../remote/instance-manager.js').InstanceManager;
+  /** Whether to show the epic loader immediately on startup (for json tracker without PRD path) */
+  initialShowEpicLoader?: boolean;
+  /** Local git repository info (from server's working directory) */
+  localGitInfo?: {
+    repoName?: string;
+    branch?: string;
+    isDirty?: boolean;
+    commitHash?: string;
+  };
 }
 
 /**
@@ -222,6 +258,7 @@ function recalculateDependencyStatus(tasks: TaskItem[]): TaskItem[] {
  * Convert all tasks and determine actionable/blocked status based on dependencies.
  * A task is 'actionable' if it has no dependencies OR all its dependencies are completed/closed.
  * A task is 'blocked' if it has any dependency that is NOT completed/closed.
+ * Also computes the 'blocks' field (inverse of dependsOn) for each task.
  */
 function convertTasksWithDependencyStatus(trackerTasks: TrackerTask[]): TaskItem[] {
   // First, create a map of task IDs to their status and title for quick lookup
@@ -230,9 +267,31 @@ function convertTasksWithDependencyStatus(trackerTasks: TrackerTask[]): TaskItem
     taskMap.set(task.id, { status: task.status, title: task.title });
   }
 
+  // Build the inverse relationship: which tasks does each task block?
+  // If task A dependsOn task B, then B blocks A
+  const blocksMap = new Map<string, string[]>();
+  for (const task of trackerTasks) {
+    if (task.dependsOn && task.dependsOn.length > 0) {
+      for (const depId of task.dependsOn) {
+        const existing = blocksMap.get(depId) || [];
+        existing.push(task.id);
+        blocksMap.set(depId, existing);
+      }
+    }
+  }
+
   // Convert each task, determining actionable/blocked based on dependencies
   return trackerTasks.map((task) => {
     const baseItem = trackerTaskToTaskItem(task);
+
+    // Add the computed 'blocks' field only if tracker didn't provide it
+    // (beads trackers provide this from CLI, JSON tracker needs computation)
+    if (!baseItem.blocks || baseItem.blocks.length === 0) {
+      const blocksIds = blocksMap.get(task.id);
+      if (blocksIds && blocksIds.length > 0) {
+        baseItem.blocks = blocksIds;
+      }
+    }
 
     // Only check dependencies for open/pending tasks
     if (baseItem.status !== 'pending') {
@@ -310,11 +369,20 @@ export function RunApp({
   currentModel,
   sandboxConfig,
   resolvedSandboxMode,
+  instanceTabs,
+  selectedTabIndex = 0,
+  onSelectTab,
+  connectionToast,
+  instanceManager,
+  initialShowEpicLoader = false,
+  localGitInfo,
 }: RunAppProps): ReactNode {
   const { width, height } = useTerminalDimensions();
   const renderer = useRenderer();
   // Copy feedback message state (auto-dismissed after 2s)
   const [copyFeedback, setCopyFeedback] = useState<string | null>(null);
+  // Info feedback message state (auto-dismissed after 4s, for hints/tips)
+  const [infoFeedback, setInfoFeedback] = useState<string | null>(null);
   const [tasks, setTasks] = useState<TaskItem[]>(() => {
     // Initialize with initial tasks if provided (for ready state)
     if (initialTasks && initialTasks.length > 0) {
@@ -360,6 +428,15 @@ export function RunApp({
   const [showHelp, setShowHelp] = useState(false);
   // Settings view state
   const [showSettings, setShowSettings] = useState(false);
+  // Remote config view state
+  const [showRemoteConfig, setShowRemoteConfig] = useState(false);
+  const [remoteConfigData, setRemoteConfigData] = useState<RemoteConfigData | null>(null);
+  const [remoteConfigLoading, setRemoteConfigLoading] = useState(false);
+  const [remoteConfigError, setRemoteConfigError] = useState<string | undefined>(undefined);
+  // Remote management overlay state (add/edit/delete remotes)
+  const [showRemoteManagement, setShowRemoteManagement] = useState(false);
+  const [remoteManagementMode, setRemoteManagementMode] = useState<RemoteManagementMode>('add');
+  const [editingRemote, setEditingRemote] = useState<ExistingRemoteData | undefined>(undefined);
   // Quit confirmation dialog state
   const [showQuitDialog, setShowQuitDialog] = useState(false);
   // Show/hide closed tasks filter (default: show closed tasks)
@@ -373,8 +450,8 @@ export function RunApp({
   const [currentTaskTitle, setCurrentTaskTitle] = useState<string | undefined>(undefined);
   // Current iteration start time (ISO timestamp)
   const [currentIterationStartedAt, setCurrentIterationStartedAt] = useState<string | undefined>(undefined);
-  // Epic loader overlay state
-  const [showEpicLoader, setShowEpicLoader] = useState(false);
+  // Epic loader overlay state (may start visible for json tracker without PRD path)
+  const [showEpicLoader, setShowEpicLoader] = useState(initialShowEpicLoader);
   const [epicLoaderEpics, setEpicLoaderEpics] = useState<TrackerTask[]>([]);
   const [epicLoaderLoading, setEpicLoaderLoading] = useState(false);
   const [epicLoaderError, setEpicLoaderError] = useState<string | undefined>(undefined);
@@ -386,14 +463,15 @@ export function RunApp({
   const [promptPreview, setPromptPreview] = useState<string | undefined>(undefined);
   const [templateSource, setTemplateSource] = useState<string | undefined>(undefined);
   // Subagent tracing detail level - initialized from config, can be cycled with 't' key
+  // Default to 'moderate' to show inline subagent sections by default
   const [subagentDetailLevel, setSubagentDetailLevel] = useState<SubagentDetailLevel>(
-    () => storedConfig?.subagentTracingDetail ?? 'off'
+    () => storedConfig?.subagentTracingDetail ?? 'moderate'
   );
   // Subagent tree for the current iteration (from engine.getSubagentTree())
   const [subagentTree, setSubagentTree] = useState<SubagentTreeNode[]>([]);
-  // Set of collapsed subagent IDs (for collapsible sections in output view)
-  const [collapsedSubagents, setCollapsedSubagents] = useState<Set<string>>(() => new Set());
-  // Currently focused subagent ID for keyboard navigation (future enhancement)
+  // Remote subagent tree (for remote viewing)
+  const [remoteSubagentTree, setRemoteSubagentTree] = useState<SubagentTreeNode[]>([]);
+  // Currently focused subagent ID for keyboard navigation
   const [focusedSubagentId, setFocusedSubagentId] = useState<string | undefined>(undefined);
   // Subagent stats cache for iteration history view (keyed by iteration number)
   const [subagentStatsCache, setSubagentStatsCache] = useState<Map<number, SubagentTraceStats>>(
@@ -414,18 +492,271 @@ export function RunApp({
   // Subagent tree panel visibility state (toggled with 'T' key)
   // Tracks subagents even when panel is hidden (subagentTree state continues updating)
   const [subagentPanelVisible, setSubagentPanelVisible] = useState(initialSubagentPanelVisible);
+  // Track if user manually hid the panel (to respect user intent for auto-show logic)
+  // When true, auto-show will not override user's explicit hide action
+  const [userManuallyHidPanel, setUserManuallyHidPanel] = useState(false);
+
+  // Focused pane for TAB-based navigation between output and subagent tree
+  // - 'output': j/k scroll output content (default)
+  // - 'subagentTree': j/k select nodes in the tree
+  const [focusedPane, setFocusedPane] = useState<FocusedPane>('output');
+
+  // Selected node in subagent tree for keyboard navigation
+  // - currentTaskId (or 'main' if no task): Task root node is selected
+  // - string: Subagent ID is selected
+  const [selectedSubagentId, setSelectedSubagentId] = useState<string>('main');
 
   // Active agent state from engine - tracks which agent is running and why (primary/fallback)
   const [activeAgentState, setActiveAgentState] = useState<ActiveAgentState | null>(null);
   // Rate limit state from engine - tracks primary agent rate limiting
   const [rateLimitState, setRateLimitState] = useState<RateLimitState | null>(null);
 
+  // Remote viewing state
+  const isViewingRemote = selectedTabIndex > 0;
+  const [remoteTasks, setRemoteTasks] = useState<TaskItem[]>([]);
+  const [remoteStatus, setRemoteStatus] = useState<RalphStatus>('ready');
+  const [remoteOutput, setRemoteOutput] = useState('');
+  const [remoteCurrentIteration, setRemoteCurrentIteration] = useState(0);
+  const [remoteMaxIterations, setRemoteMaxIterations] = useState(10);
+  const [remoteCurrentTaskId, setRemoteCurrentTaskId] = useState<string | undefined>(undefined);
+  const [remoteActiveAgent, setRemoteActiveAgent] = useState<ActiveAgentState | null>(null);
+  const [remoteRateLimitState, setRemoteRateLimitState] = useState<RateLimitState | null>(null);
+  const [remoteCurrentTaskTitle, setRemoteCurrentTaskTitle] = useState<string | undefined>(undefined);
+  const [remoteAgentName, setRemoteAgentName] = useState<string | undefined>(undefined);
+  const [remoteTrackerName, setRemoteTrackerName] = useState<string | undefined>(undefined);
+  const [remoteModel, setRemoteModel] = useState<string | undefined>(undefined);
+  const [remoteAutoCommit, setRemoteAutoCommit] = useState<boolean | undefined>(undefined);
+  // Remote sandbox config for display
+  const [remoteSandboxConfig, setRemoteSandboxConfig] = useState<SandboxConfig | undefined>(undefined);
+  const [remoteResolvedSandboxMode, setRemoteResolvedSandboxMode] = useState<Exclude<SandboxMode, 'auto'> | undefined>(undefined);
+  // Remote git info for display
+  const [remoteGitInfo, setRemoteGitInfo] = useState<{
+    repoName?: string;
+    branch?: string;
+    isDirty?: boolean;
+    commitHash?: string;
+  } | undefined>(undefined);
+  // Cache for remote iteration output by task ID (similar to historicalOutputCache for local)
+  const [remoteIterationCache, setRemoteIterationCache] = useState<Map<string, {
+    iteration: number;
+    output: string;
+    startedAt?: string;
+    endedAt?: string;
+    durationMs?: number;
+    isRunning: boolean;
+  }>>(new Map());
+
+  // Get the selected tab's connection status from instanceTabs
+  // This is used to trigger data fetch when connection completes
+  const selectedTabStatus = instanceTabs?.[selectedTabIndex]?.status;
+
+  // Fetch remote data when switching to a remote tab AND when it becomes connected
+  useEffect(() => {
+    if (!isViewingRemote || !instanceManager) return;
+
+    // Wait for the tab to be connected before fetching data
+    // This fixes the issue where first tab select doesn't load data because
+    // the client is still in 'connecting' state
+    if (selectedTabStatus !== 'connected') {
+      return;
+    }
+
+    const fetchRemoteData = async () => {
+      // Get remote state
+      const state = await instanceManager.getRemoteState();
+      if (state) {
+        // Convert engine status to RalphStatus
+        // Engine statuses: 'idle' | 'running' | 'pausing' | 'paused' | 'stopping'
+        const statusMap: Record<string, RalphStatus> = {
+          idle: 'ready',
+          running: 'running',
+          pausing: 'pausing',
+          paused: 'paused',
+          stopping: 'stopped',
+        };
+        setRemoteStatus(statusMap[state.status] || 'ready');
+        setRemoteCurrentIteration(state.currentIteration);
+        setRemoteMaxIterations(state.maxIterations);
+        setRemoteOutput(state.currentOutput || '');
+        if (state.currentTask) {
+          setRemoteCurrentTaskId(state.currentTask.id);
+          setRemoteCurrentTaskTitle(state.currentTask.title);
+        }
+        // Capture remote agent and rate limit state
+        if (state.activeAgent) {
+          setRemoteActiveAgent(state.activeAgent);
+        }
+        if (state.rateLimitState) {
+          setRemoteRateLimitState(state.rateLimitState);
+        }
+        // Capture remote config info for display
+        if (state.agentName) {
+          setRemoteAgentName(state.agentName);
+        }
+        if (state.trackerName) {
+          setRemoteTrackerName(state.trackerName);
+        }
+        if (state.currentModel) {
+          setRemoteModel(state.currentModel);
+        }
+        // Capture auto-commit setting for status display
+        if (state.autoCommit !== undefined) {
+          setRemoteAutoCommit(state.autoCommit);
+        }
+        // Capture sandbox config for display
+        if (state.sandboxConfig) {
+          setRemoteSandboxConfig({
+            enabled: state.sandboxConfig.enabled,
+            mode: state.sandboxConfig.mode,
+            network: state.sandboxConfig.network,
+          });
+        }
+        if (state.resolvedSandboxMode) {
+          setRemoteResolvedSandboxMode(state.resolvedSandboxMode);
+        }
+        // Capture git info for display
+        if (state.gitInfo) {
+          setRemoteGitInfo(state.gitInfo);
+        }
+        // Set remote subagent tree if available
+        if (state.subagentTree) {
+          setRemoteSubagentTree(state.subagentTree);
+        }
+      }
+
+      // Fetch tasks separately (getRemoteState returns empty tasks array)
+      const tasks = await instanceManager.getRemoteTasks();
+      if (tasks && tasks.length > 0) {
+        // Convert tasks and mark the currently running task as 'active'
+        const convertedTasks = convertTasksWithDependencyStatus(tasks);
+        const currentTaskId = state?.currentTask?.id;
+        if (currentTaskId) {
+          const updatedTasks = convertedTasks.map(t =>
+            t.id === currentTaskId ? { ...t, status: 'active' as const } : t
+          );
+          setRemoteTasks(updatedTasks);
+        } else {
+          setRemoteTasks(convertedTasks);
+        }
+      }
+
+      // Subscribe to engine events
+      await instanceManager.subscribeToSelectedRemote();
+    };
+
+    fetchRemoteData().catch((err) => {
+      console.error('Failed to fetch remote data:', err);
+    });
+
+    // Subscribe to engine events from InstanceManager
+    const unsubscribe = instanceManager.onEngineEvent((event) => {
+      switch (event.type) {
+        case 'engine:started':
+          setRemoteStatus('running');
+          break;
+        case 'engine:stopped':
+          setRemoteStatus(event.reason === 'completed' ? 'complete' : 'ready');
+          break;
+        case 'engine:paused':
+          setRemoteStatus('paused');
+          break;
+        case 'engine:resumed':
+          setRemoteStatus('running');
+          break;
+        case 'iteration:started':
+          setRemoteCurrentIteration(event.iteration);
+          setRemoteCurrentTaskId(event.task.id);
+          setRemoteCurrentTaskTitle(event.task.title);
+          setRemoteOutput(''); // Clear output for new iteration
+          setRemoteSubagentTree([]); // Clear subagent tree for new iteration
+          // Mark this task as active in the task list
+          setRemoteTasks((prevTasks) =>
+            prevTasks.map((t) =>
+              t.id === event.task.id
+                ? { ...t, status: 'active' as const }
+                : t.status === 'active'
+                  ? { ...t, status: 'actionable' as const }
+                  : t
+            )
+          );
+          break;
+        case 'agent:output':
+          if (event.stream === 'stdout') {
+            setRemoteOutput((prev) => prev + event.data);
+          }
+          // Refresh remote state to get updated subagent tree
+          instanceManager.getRemoteState().then((state) => {
+            if (state?.subagentTree) {
+              setRemoteSubagentTree(state.subagentTree);
+            }
+          }).catch((err) => {
+            console.error('Failed to refresh remote state:', err);
+          });
+          break;
+        case 'task:completed':
+          // Refresh task list
+          instanceManager.getRemoteTasks().then((tasks) => {
+            if (tasks) {
+              setRemoteTasks(convertTasksWithDependencyStatus(tasks));
+            }
+          }).catch((err) => {
+            console.error('Failed to refresh remote tasks:', err);
+          });
+          break;
+        case 'agent:switched':
+          // Agent was switched (primary to fallback or recovery) on remote
+          setRemoteActiveAgent({
+            plugin: event.newAgent,
+            reason: event.reason,
+            since: event.timestamp,
+          });
+          if (event.rateLimitState) {
+            setRemoteRateLimitState(event.rateLimitState);
+          }
+          break;
+      }
+    });
+
+    return () => {
+      unsubscribe();
+      instanceManager.unsubscribeFromSelectedRemote();
+    };
+  }, [isViewingRemote, selectedTabIndex, selectedTabStatus, instanceManager]);
+
+  // Computed display values that switch between local and remote state
+  // These are used in the UI to show the appropriate data based on which tab is selected
+  const displayStatus = isViewingRemote ? remoteStatus : status;
+  const displayCurrentIteration = isViewingRemote ? remoteCurrentIteration : currentIteration;
+  const displayMaxIterations = isViewingRemote ? remoteMaxIterations : maxIterations;
+  const displayCurrentTaskId = isViewingRemote ? remoteCurrentTaskId : currentTaskId;
+  const displayCurrentTaskTitle = isViewingRemote ? remoteCurrentTaskTitle : currentTaskTitle;
+
   // Compute display agent name - prefer active agent from engine state, fallback to config
-  const displayAgentName = activeAgentState?.plugin ?? agentName;
+  // For remote viewing, use remote active agent state, then remote config, then local config
+  const displayAgentName = isViewingRemote
+    ? (remoteActiveAgent?.plugin ?? remoteAgentName ?? agentName)
+    : (activeAgentState?.plugin ?? agentName);
+
+  // Compute display tracker and model for local vs remote
+  const displayTrackerName = isViewingRemote ? (remoteTrackerName ?? trackerName) : trackerName;
+  const displayModel = isViewingRemote ? (remoteModel ?? currentModel) : currentModel;
+
+  // Count running subagents for status indicator when panel is hidden
+  const runningSubagentCount = useMemo(() => {
+    const countRunning = (nodes: SubagentTreeNode[]): number => {
+      return nodes.reduce((sum, node) => {
+        const self = node.state.status === 'running' ? 1 : 0;
+        return sum + self + countRunning(node.children);
+      }, 0);
+    };
+    const tree = isViewingRemote ? remoteSubagentTree : subagentTree;
+    return countRunning(tree);
+  }, [subagentTree, remoteSubagentTree, isViewingRemote]);
 
   // Filter and sort tasks for display
   // Sort order: active → actionable → blocked → done → closed
   // This is computed early so keyboard handlers can use displayedTasks.length
+  // Use remoteTasks when viewing a remote instance
   const displayedTasks = useMemo(() => {
     // Status priority for sorting (lower = higher priority)
     const statusPriority: Record<TaskStatus, number> = {
@@ -438,13 +769,15 @@ export function RunApp({
       closed: 6,
     };
 
-    const filtered = showClosedTasks ? tasks : tasks.filter((t) => t.status !== 'closed');
+    // Use remote tasks when viewing remote, local tasks otherwise
+    const sourceTasks = isViewingRemote ? remoteTasks : tasks;
+    const filtered = showClosedTasks ? sourceTasks : sourceTasks.filter((t) => t.status !== 'closed');
     return [...filtered].sort((a, b) => {
       const priorityA = statusPriority[a.status] ?? 10;
       const priorityB = statusPriority[b.status] ?? 10;
       return priorityA - priorityB;
     });
-  }, [tasks, showClosedTasks]);
+  }, [tasks, remoteTasks, isViewingRemote, showClosedTasks]);
 
   // Clamp selectedIndex when displayedTasks shrinks (e.g., when hiding closed tasks)
   useEffect(() => {
@@ -452,6 +785,16 @@ export function RunApp({
       setSelectedIndex(displayedTasks.length - 1);
     }
   }, [displayedTasks.length, selectedIndex]);
+
+  // Auto-show subagent panel when first subagent spawns (unless user manually hid it)
+  // This makes subagent activity discoverable without requiring users to know about 'T' key
+  useEffect(() => {
+    if (subagentTree.length > 0 && !subagentPanelVisible && !userManuallyHidPanel) {
+      setSubagentPanelVisible(true);
+      // Also persist the change to session state
+      onSubagentPanelVisibilityChange?.(true);
+    }
+  }, [subagentTree.length, subagentPanelVisible, userManuallyHidPanel, onSubagentPanelVisibilityChange]);
 
   // Regenerate prompt preview when selected task changes (if in prompt view mode)
   // This keeps the prompt preview in sync with the currently selected task/iteration
@@ -486,16 +829,33 @@ export function RunApp({
     setTemplateSource(undefined);
 
     void (async () => {
-      const result = await engine.generatePromptPreview(effectiveTaskId);
-      // Don't update state if this effect was cancelled (user changed task again)
-      if (cancelled) return;
+      // Use remote API when viewing remote, local engine otherwise
+      if (isViewingRemote && instanceManager) {
+        const result = await instanceManager.getRemotePromptPreview(effectiveTaskId);
+        if (cancelled) return;
 
-      if (result.success) {
-        setPromptPreview(result.prompt);
-        setTemplateSource(result.source);
+        if (result === null) {
+          setPromptPreview('Unable to fetch prompt preview from remote.\n\nConnection may not be ready.');
+          setTemplateSource(undefined);
+        } else if (result.success) {
+          setPromptPreview(result.prompt);
+          setTemplateSource(result.source);
+        } else {
+          setPromptPreview(`Error: ${result.error}`);
+          setTemplateSource(undefined);
+        }
       } else {
-        setPromptPreview(`Error: ${result.error}`);
-        setTemplateSource(undefined);
+        const result = await engine.generatePromptPreview(effectiveTaskId);
+        // Don't update state if this effect was cancelled (user changed task again)
+        if (cancelled) return;
+
+        if (result.success) {
+          setPromptPreview(result.prompt);
+          setTemplateSource(result.source);
+        } else {
+          setPromptPreview(`Error: ${result.error}`);
+          setTemplateSource(undefined);
+        }
       }
     })();
 
@@ -503,7 +863,55 @@ export function RunApp({
     return () => {
       cancelled = true;
     };
-  }, [detailsViewMode, viewMode, displayedTasks, selectedIndex, iterations, iterationSelectedIndex, engine]);
+  }, [detailsViewMode, viewMode, displayedTasks, selectedIndex, iterations, iterationSelectedIndex, engine, isViewingRemote, instanceManager]);
+
+  // Fetch remote iteration output when selecting a different task (for remote viewing)
+  // This fills the remoteIterationCache so the useMemo can use it synchronously
+  useEffect(() => {
+    // Skip if not viewing remote or no instance manager
+    if (!isViewingRemote || !instanceManager) return;
+
+    // Get the effective task ID that we're viewing
+    const selectedIteration = viewMode === 'iterations' && iterations.length > 0
+      ? iterations[iterationSelectedIndex]
+      : undefined;
+    const effectiveTaskId = viewMode === 'iterations'
+      ? selectedIteration?.task?.id
+      : displayedTasks[selectedIndex]?.id;
+
+    // Skip if no task selected or if this is the currently running task
+    // (currently running task uses live remoteOutput, not cached)
+    if (!effectiveTaskId || effectiveTaskId === remoteCurrentTaskId) return;
+
+    // Check if we already have this task in cache
+    if (remoteIterationCache.has(effectiveTaskId)) return;
+
+    // Fetch iteration output from remote
+    let cancelled = false;
+    void (async () => {
+      const result = await instanceManager.getRemoteIterationOutput(effectiveTaskId);
+      if (cancelled) return;
+
+      if (result && result.success && result.output !== undefined) {
+        setRemoteIterationCache((prev) => {
+          const next = new Map(prev);
+          next.set(effectiveTaskId, {
+            iteration: result.iteration ?? 0,
+            output: result.output ?? '',
+            startedAt: result.startedAt,
+            endedAt: result.endedAt,
+            durationMs: result.durationMs,
+            isRunning: result.isRunning ?? false,
+          });
+          return next;
+        });
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isViewingRemote, instanceManager, viewMode, iterations, iterationSelectedIndex, displayedTasks, selectedIndex, remoteCurrentTaskId, remoteIterationCache]);
 
   // Update output parser when agent changes (parser was created before config was loaded)
   useEffect(() => {
@@ -566,8 +974,10 @@ export function RunApp({
           outputParserRef.current.reset();
           // Clear subagent state for new iteration
           setSubagentTree([]);
-          setCollapsedSubagents(new Set());
           setFocusedSubagentId(undefined);
+          setSelectedSubagentId('main');
+          // Reset user manual hide state for new iteration - allows auto-show for new subagents
+          setUserManuallyHidPanel(false);
           // Set current task info for display
           setCurrentTaskId(event.task.id);
           setCurrentTaskTitle(event.task.title);
@@ -662,11 +1072,10 @@ export function RunApp({
             // Also update segments for TUI-native color rendering
             setCurrentSegments(outputParserRef.current.getSegments());
           }
-          // Refresh subagent tree from engine (subagent events are processed in engine)
-          // Only refresh if subagent tracing is enabled to avoid unnecessary work
-          if (subagentDetailLevel !== 'off') {
-            setSubagentTree(engine.getSubagentTree());
-          }
+          // Always refresh subagent tree from engine (subagent events are processed in engine).
+          // This decouples data collection from display preferences - the subagentDetailLevel
+          // only affects how much detail to show inline, not whether to track subagents.
+          setSubagentTree(engine.getSubagentTree());
           break;
 
         case 'agent:switched':
@@ -718,7 +1127,7 @@ export function RunApp({
     });
 
     return unsubscribe;
-  }, [engine, subagentDetailLevel]);
+  }, [engine]);
 
   // Update elapsed time every second - only while executing
   // Timer accumulates total execution time across all iterations
@@ -756,23 +1165,42 @@ export function RunApp({
     }
   }, [engine, agentName]);
 
+  // Sync task selection → agent tree selection
+  // When currentTaskId changes, reset tree selection to the task root
+  useEffect(() => {
+    if (currentTaskId) {
+      setSelectedSubagentId(currentTaskId);
+    } else {
+      setSelectedSubagentId('main');
+    }
+  }, [currentTaskId]);
+
   // Calculate the number of items in iteration history (iterations + pending)
   const iterationHistoryLength = Math.max(iterations.length, totalIterations);
 
-  // Handler for toggling subagent section collapse state
-  const handleSubagentToggle = useCallback((id: string) => {
-    setCollapsedSubagents((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) {
-        next.delete(id);
-      } else {
-        next.add(id);
+  // Navigate through subagent tree with j/k keys
+  // Builds a flattened list of all nodes (task root + subagents) and moves selection
+  const navigateSubagentTree = useCallback((direction: 1 | -1) => {
+    // Use the appropriate tree based on whether viewing remote
+    const tree = isViewingRemote ? remoteSubagentTree : subagentTree;
+    // Root node ID: displayCurrentTaskId if available, otherwise 'main' for backwards compat
+    const rootNodeId = displayCurrentTaskId || 'main';
+    // Build flat list: [rootNodeId, ...all subagent IDs in tree order]
+    const flatList: string[] = [rootNodeId];
+
+    function traverse(nodes: SubagentTreeNode[]) {
+      for (const node of nodes) {
+        flatList.push(node.state.id);
+        traverse(node.children);
       }
-      return next;
-    });
-    // Update focused subagent when toggling
-    setFocusedSubagentId(id);
-  }, []);
+    }
+    traverse(tree);
+
+    // Find current index and move
+    const currentIdx = flatList.indexOf(selectedSubagentId);
+    const newIdx = Math.max(0, Math.min(flatList.length - 1, currentIdx + direction));
+    setSelectedSubagentId(flatList[newIdx]!);
+  }, [subagentTree, remoteSubagentTree, isViewingRemote, selectedSubagentId, displayCurrentTaskId]);
 
   // Handle keyboard navigation
   const handleKeyboard = useCallback(
@@ -846,9 +1274,20 @@ export function RunApp({
         return;
       }
 
+      // When remote config view is showing, let it handle its own keyboard events
+      // Closing is handled by RemoteConfigView internally via onClose callback
+      if (showRemoteConfig) {
+        return;
+      }
+
       // When epic loader is showing, only Escape closes it
       // Epic loader handles its own keyboard events via useKeyboard
       if (showEpicLoader) {
+        return;
+      }
+
+      // When remote management overlay is showing, let it handle its own keyboard events
+      if (showRemoteManagement) {
         return;
       }
 
@@ -869,8 +1308,22 @@ export function RunApp({
           }
           break;
 
+        case 'tab':
+          // Toggle focus between output and subagent tree panels
+          // Only works when subagent panel is visible and in output view mode
+          if (subagentPanelVisible && detailsViewMode === 'output') {
+            setFocusedPane((prev) => prev === 'output' ? 'subagentTree' : 'output');
+          }
+          break;
+
         case 'up':
         case 'k':
+          // Focus-aware navigation: when subagent panel is visible and focused, navigate tree
+          if (detailsViewMode === 'output' && subagentPanelVisible && focusedPane === 'subagentTree') {
+            navigateSubagentTree(-1);
+            break;
+          }
+          // Default: navigate task/iteration lists
           if (viewMode === 'tasks') {
             setSelectedIndex((prev) => Math.max(0, prev - 1));
           } else if (viewMode === 'iterations') {
@@ -880,6 +1333,12 @@ export function RunApp({
 
         case 'down':
         case 'j':
+          // Focus-aware navigation: when subagent panel is visible and focused, navigate tree
+          if (detailsViewMode === 'output' && subagentPanelVisible && focusedPane === 'subagentTree') {
+            navigateSubagentTree(1);
+            break;
+          }
+          // Default: navigate task/iteration lists
           if (viewMode === 'tasks') {
             setSelectedIndex((prev) => Math.min(displayedTasks.length - 1, prev + 1));
           } else if (viewMode === 'iterations') {
@@ -892,16 +1351,34 @@ export function RunApp({
           // When running/executing/selecting, pause will transition to pausing, then to paused
           // When pausing, pressing p again will cancel the pause request
           // When paused, resume will transition back to selecting
-          if (status === 'running' || status === 'executing' || status === 'selecting') {
-            engine.pause();
-            setStatus('pausing');
-          } else if (status === 'pausing') {
-            // Cancel pause request
-            engine.resume();
-            setStatus('selecting');
-          } else if (status === 'paused') {
-            engine.resume();
-            // Status will update via engine event
+          if (isViewingRemote && instanceManager) {
+            // Route to remote instance
+            if (displayStatus === 'running' || displayStatus === 'executing' || displayStatus === 'selecting') {
+              // Set status to 'pausing' immediately for feedback
+              setRemoteStatus('pausing');
+              instanceManager.sendRemoteCommand('pause');
+            } else if (displayStatus === 'pausing') {
+              // Cancel pause request - set back to running
+              setRemoteStatus('running');
+              instanceManager.sendRemoteCommand('resume');
+            } else if (displayStatus === 'paused') {
+              // Resume from paused - set to selecting
+              setRemoteStatus('selecting');
+              instanceManager.sendRemoteCommand('resume');
+            }
+          } else {
+            // Local engine control
+            if (status === 'running' || status === 'executing' || status === 'selecting') {
+              engine.pause();
+              setStatus('pausing');
+            } else if (status === 'pausing') {
+              // Cancel pause request
+              engine.resume();
+              setStatus('selecting');
+            } else if (status === 'paused') {
+              engine.resume();
+              // Status will update via engine event
+            }
           }
           break;
 
@@ -933,33 +1410,45 @@ export function RunApp({
 
         case 's':
           // Start/continue execution - 's' always means "keep going"
-          if (status === 'ready' && onStart) {
-            // First start - use onStart callback
-            setStatus('running');
-            onStart();
-          } else if (status === 'stopped' || status === 'idle') {
-            // Continue after stop - use engine.continueExecution()
-            if (currentIteration >= maxIterations) {
-              // At max iterations, add one more then continue
-              engine.addIterations(1).then((shouldContinue) => {
-                if (shouldContinue) {
-                  setStatus('running');
-                  engine.continueExecution();
-                }
-              }).catch((err) => {
-                console.error('Failed to add iteration:', err);
-              });
-            } else {
-              // Have iterations remaining, just continue
+          if (isViewingRemote && instanceManager) {
+            // Route to remote instance - send continue command
+            if (displayStatus === 'stopped' || displayStatus === 'idle' || displayStatus === 'ready') {
+              instanceManager.sendRemoteCommand('continue');
+            }
+          } else {
+            // Local engine control
+            if (status === 'ready' && onStart) {
+              // First start - use onStart callback
               setStatus('running');
-              engine.continueExecution();
+              onStart();
+            } else if (status === 'stopped' || status === 'idle') {
+              // Continue after stop - use engine.continueExecution()
+              if (currentIteration >= maxIterations) {
+                // At max iterations, add one more then continue
+                engine.addIterations(1).then((shouldContinue) => {
+                  if (shouldContinue) {
+                    setStatus('running');
+                    engine.continueExecution();
+                  }
+                }).catch((err) => {
+                  console.error('Failed to add iteration:', err);
+                });
+              } else {
+                // Have iterations remaining, just continue
+                setStatus('running');
+                engine.continueExecution();
+              }
             }
           }
           break;
 
         case 'r':
           // Refresh task list from tracker
-          engine.refreshTasks();
+          if (isViewingRemote && instanceManager) {
+            instanceManager.sendRemoteCommand('refreshTasks');
+          } else {
+            engine.refreshTasks();
+          }
           break;
 
         case '+':
@@ -969,27 +1458,38 @@ export function RunApp({
           // Add/remove 10 iterations: +/= add, -/_ remove
           const isPlus = key.name === '+' || key.name === '=';
           const isMinus = key.name === '-' || key.name === '_';
+          const effectiveStatus = isViewingRemote ? displayStatus : status;
           if ((isPlus || isMinus) &&
-              (status === 'ready' || status === 'running' || status === 'executing' || status === 'paused' || status === 'stopped' || status === 'idle' || status === 'complete')) {
-            if (isPlus) {
-              engine.addIterations(10).then((shouldContinue) => {
-                if (shouldContinue || status === 'complete') {
-                  setStatus('running');
-                  engine.continueExecution();
-                }
-              }).catch((err) => {
-                console.error('Failed to add iterations:', err);
-              });
+              (effectiveStatus === 'ready' || effectiveStatus === 'running' || effectiveStatus === 'executing' || effectiveStatus === 'paused' || effectiveStatus === 'stopped' || effectiveStatus === 'idle' || effectiveStatus === 'complete')) {
+            if (isViewingRemote && instanceManager) {
+              // Route to remote instance
+              if (isPlus) {
+                instanceManager.addRemoteIterations(10);
+              } else {
+                instanceManager.removeRemoteIterations(10);
+              }
             } else {
-              engine.removeIterations(10)
-                .then((success) => {
-                  if (!success) {
-                    console.log('Cannot reduce below current iteration or minimum of 1');
+              // Local engine control
+              if (isPlus) {
+                engine.addIterations(10).then((shouldContinue) => {
+                  if (shouldContinue || status === 'complete') {
+                    setStatus('running');
+                    engine.continueExecution();
                   }
-                })
-                .catch((err) => {
-                  console.error('Failed to remove iterations:', err);
+                }).catch((err) => {
+                  console.error('Failed to add iterations:', err);
                 });
+              } else {
+                engine.removeIterations(10)
+                  .then((success) => {
+                    if (!success) {
+                      console.log('Cannot reduce below current iteration or minimum of 1');
+                    }
+                  })
+                  .catch((err) => {
+                    console.error('Failed to remove iterations:', err);
+                  });
+              }
             }
           }
           break;
@@ -1001,8 +1501,83 @@ export function RunApp({
           }
           break;
 
+        case 'c':
+          // Shift+C: Show config viewer (read-only) for both local and remote
+          if (key.sequence === 'C') {
+            setShowRemoteConfig(true);
+            setRemoteConfigLoading(true);
+            setRemoteConfigError(undefined);
+            setRemoteConfigData(null);
+
+            if (isViewingRemote && instanceManager) {
+              // For remote tabs, fetch config from remote
+              instanceManager.checkRemoteConfig()
+                .then((data) => {
+                  if (data) {
+                    setRemoteConfigData(data);
+                  } else {
+                    setRemoteConfigError('Failed to fetch remote config');
+                  }
+                  setRemoteConfigLoading(false);
+                })
+                .catch((err) => {
+                  setRemoteConfigError(err instanceof Error ? err.message : 'Failed to fetch remote config');
+                  setRemoteConfigLoading(false);
+                });
+            } else {
+              // For local tab, read config files from disk
+              import('fs/promises').then(async (fs) => {
+                const { homedir } = await import('os');
+                const { join } = await import('path');
+                try {
+                  const globalPath = join(homedir(), '.config', 'ralph-tui', 'config.toml');
+                  const projectPath = join(cwd, '.ralph-tui', 'config.toml');
+
+                  let globalExists = false;
+                  let globalContent: string | undefined;
+                  let projectExists = false;
+                  let projectContent: string | undefined;
+
+                  try {
+                    globalContent = await fs.readFile(globalPath, 'utf-8');
+                    globalExists = true;
+                  } catch {
+                    // File doesn't exist
+                  }
+
+                  try {
+                    projectContent = await fs.readFile(projectPath, 'utf-8');
+                    projectExists = true;
+                  } catch {
+                    // File doesn't exist
+                  }
+
+                  setRemoteConfigData({
+                    globalExists,
+                    projectExists,
+                    globalPath: globalExists ? globalPath : undefined,
+                    projectPath: projectExists ? projectPath : undefined,
+                    globalContent,
+                    projectContent,
+                    remoteCwd: cwd,
+                  });
+                  setRemoteConfigLoading(false);
+                } catch (err) {
+                  setRemoteConfigError(err instanceof Error ? err.message : 'Failed to load config');
+                  setRemoteConfigLoading(false);
+                }
+              });
+            }
+          }
+          break;
+
         case 'l':
           // Open epic loader to switch epics (only when not executing)
+          // Disabled for remote instances - epic loading is local-only
+          if (isViewingRemote) {
+            setInfoFeedback('Epic/PRD loading not available for remote instances');
+            break;
+          }
           if (onLoadEpics && (status === 'ready' || status === 'paused' || status === 'stopped' || status === 'idle' || status === 'complete' || status === 'error')) {
             setShowEpicLoader(true);
             setEpicLoaderLoading(true);
@@ -1047,6 +1622,11 @@ export function RunApp({
             // The panel shows on the right side; subagent tracking continues even when hidden
             setSubagentPanelVisible((prev) => {
               const newVisible = !prev;
+              // If user is hiding the panel, mark it as manually hidden
+              // This prevents auto-show from overriding user intent
+              if (!newVisible) {
+                setUserManuallyHidPanel(true);
+              }
               // Persist the change to session state
               onSubagentPanelVisibilityChange?.(newVisible);
               return newVisible;
@@ -1083,18 +1663,110 @@ export function RunApp({
             }
           }
           break;
+
+        // Tab navigation: number keys 1-9 to switch tabs
+        case '1':
+        case '2':
+        case '3':
+        case '4':
+        case '5':
+        case '6':
+        case '7':
+        case '8':
+        case '9':
+          if (instanceTabs && onSelectTab) {
+            const tabIndex = parseInt(key.name, 10) - 1;
+            if (tabIndex < instanceTabs.length) {
+              onSelectTab(tabIndex);
+            }
+          }
+          break;
+
+        // Tab navigation: [ and ] to cycle tabs
+        case '[':
+          if (instanceTabs && onSelectTab && instanceTabs.length > 1) {
+            const prevIndex = (selectedTabIndex - 1 + instanceTabs.length) % instanceTabs.length;
+            onSelectTab(prevIndex);
+          }
+          break;
+
+        case ']':
+          if (instanceTabs && onSelectTab && instanceTabs.length > 1) {
+            const nextIndex = (selectedTabIndex + 1) % instanceTabs.length;
+            onSelectTab(nextIndex);
+          }
+          break;
+
+        // Remote management: 'a' to add new remote
+        case 'a':
+          // Open add remote overlay
+          setRemoteManagementMode('add');
+          setEditingRemote(undefined);
+          setShowRemoteManagement(true);
+          break;
+
+        // Remote management: 'e' to edit current remote (only when viewing a remote tab)
+        case 'e':
+          if (isViewingRemote && instanceTabs && selectedTabIndex > 0) {
+            const tab = instanceTabs[selectedTabIndex];
+            if (tab?.alias) {
+              // Load remote data for editing
+              getRemote(tab.alias).then((config) => {
+                if (config) {
+                  setEditingRemote({
+                    alias: tab.alias!,
+                    host: config.host,
+                    port: config.port,
+                    token: config.token,
+                  });
+                  setRemoteManagementMode('edit');
+                  setShowRemoteManagement(true);
+                }
+              }).catch((err) => {
+                console.error('Failed to load remote config for editing:', err);
+                setInfoFeedback('Failed to load remote configuration');
+              });
+            }
+          }
+          break;
+
+        // Remote management: 'x' to delete current remote (only when viewing a remote tab)
+        case 'x':
+          if (isViewingRemote && instanceTabs && selectedTabIndex > 0) {
+            const tab = instanceTabs[selectedTabIndex];
+            if (tab?.alias) {
+              // Load remote data for delete confirmation
+              getRemote(tab.alias).then((config) => {
+                if (config) {
+                  setEditingRemote({
+                    alias: tab.alias!,
+                    host: config.host,
+                    port: config.port,
+                    token: config.token,
+                  });
+                  setRemoteManagementMode('delete');
+                  setShowRemoteManagement(true);
+                }
+              }).catch((err) => {
+                console.error('Failed to load remote config for deletion:', err);
+                setInfoFeedback('Failed to load remote configuration');
+              });
+            }
+          }
+          break;
       }
     },
-    [displayedTasks, selectedIndex, status, engine, onQuit, viewMode, iterations, iterationSelectedIndex, iterationHistoryLength, onIterationDrillDown, showInterruptDialog, onInterruptConfirm, onInterruptCancel, showHelp, showSettings, showQuitDialog, showEpicLoader, onStart, storedConfig, onSaveSettings, onLoadEpics, subagentDetailLevel, onSubagentPanelVisibilityChange, currentIteration, maxIterations, renderer]
+    [displayedTasks, selectedIndex, status, engine, onQuit, viewMode, iterations, iterationSelectedIndex, iterationHistoryLength, onIterationDrillDown, showInterruptDialog, onInterruptConfirm, onInterruptCancel, showHelp, showSettings, showQuitDialog, showEpicLoader, showRemoteManagement, onStart, storedConfig, onSaveSettings, onLoadEpics, subagentDetailLevel, onSubagentPanelVisibilityChange, currentIteration, maxIterations, renderer, detailsViewMode, subagentPanelVisible, focusedPane, navigateSubagentTree, instanceTabs, selectedTabIndex, onSelectTab, isViewingRemote, displayStatus, instanceManager]
   );
 
   useKeyboard(handleKeyboard);
 
-  // Calculate layout - account for dashboard height when visible
+  // Calculate layout - account for dashboard and tab bar height when visible
   const dashboardHeight = showDashboard ? layout.progressDashboard.height : 0;
+  const tabBarHeight = instanceTabs && instanceTabs.length > 1 ? layout.tabBar.height : 0;
   const contentHeight = Math.max(
     1,
-    height - layout.header.height - layout.footer.height - dashboardHeight
+    height - layout.header.height - layout.footer.height - dashboardHeight - tabBarHeight
   );
   const isCompact = width < 80;
 
@@ -1126,6 +1798,51 @@ export function RunApp({
   // - If completed iteration exists: show that iteration's output with timing
   // - Otherwise: undefined (will show "waiting" or appropriate message)
   const selectedTaskIteration = useMemo(() => {
+    // When viewing remote, check if we're viewing the currently running task
+    // or a different task (which should use the cache)
+    if (isViewingRemote) {
+      // If this is the currently running task, show live output
+      if (effectiveTaskId === remoteCurrentTaskId && remoteStatus === 'running') {
+        const timing: IterationTimingInfo = {
+          isRunning: true,
+        };
+        return {
+          iteration: remoteCurrentIteration,
+          output: remoteOutput || undefined,
+          segments: undefined,
+          timing,
+        };
+      }
+
+      // Check if we have cached iteration data for this task
+      if (effectiveTaskId && remoteIterationCache.has(effectiveTaskId)) {
+        const cached = remoteIterationCache.get(effectiveTaskId)!;
+        const timing: IterationTimingInfo = {
+          startedAt: cached.startedAt,
+          endedAt: cached.endedAt,
+          durationMs: cached.durationMs,
+          isRunning: cached.isRunning,
+        };
+        return {
+          iteration: cached.iteration,
+          output: cached.output,
+          segments: undefined,
+          timing,
+        };
+      }
+
+      // No data available yet (being fetched or task never run)
+      const timing: IterationTimingInfo = {
+        isRunning: false,
+      };
+      return {
+        iteration: 0,
+        output: undefined,
+        segments: undefined,
+        timing,
+      };
+    }
+
     // If no effective task ID, check if there's currently executing task and show that
     if (!effectiveTaskId) {
       // If there's a current task executing, show its output even if no task selected
@@ -1186,7 +1903,156 @@ export function RunApp({
 
     // Task hasn't been run yet (or historical log not yet loaded)
     return { iteration: 0, output: undefined, segments: undefined, timing: undefined };
-  }, [effectiveTaskId, selectedTask, selectedIteration, viewMode, currentTaskId, currentIteration, currentOutput, currentSegments, iterations, historicalOutputCache, currentIterationStartedAt]);
+  }, [effectiveTaskId, selectedTask, selectedIteration, viewMode, currentTaskId, currentIteration, currentOutput, currentSegments, iterations, historicalOutputCache, currentIterationStartedAt, isViewingRemote, remoteStatus, remoteCurrentIteration, remoteOutput, remoteIterationCache, remoteCurrentTaskId]);
+
+  // Compute the actual output to display based on selectedSubagentId
+  // When a subagent is selected (not task root), try to get its specific output
+  // NOTE: Only use selectedSubagentId when viewing the current task - subagent tree
+  // only shows subagents for the currently executing task
+  const displayIterationOutput = useMemo(() => {
+    // Compute effective task ID - what task are we actually viewing?
+    // This avoids using potentially stale selectedTask?.id directly
+    const effectiveTaskId = viewMode === 'iterations'
+      ? selectedIteration?.task?.id
+      : selectedTask?.id;
+
+    // Check if we're viewing the currently executing task
+    // For remote instances, compare against remoteCurrentTaskId
+    const activeTaskId = isViewingRemote ? remoteCurrentTaskId : currentTaskId;
+    const isViewingCurrentTask = effectiveTaskId === activeTaskId;
+
+    // Check if task root is selected (effectiveTaskId or 'main' for backwards compat)
+    const isTaskRootSelected = selectedSubagentId === effectiveTaskId || selectedSubagentId === 'main';
+
+    // If not viewing current task, or task root is selected, show the iteration output
+    if (!isViewingCurrentTask || isTaskRootSelected) {
+      return selectedTaskIteration.output;
+    }
+
+    // Helper to recursively find a subagent node by ID
+    function findSubagentNode(nodes: SubagentTreeNode[], id: string): SubagentTreeNode | undefined {
+      for (const node of nodes) {
+        if (node.state.id === id) return node;
+        const found = findSubagentNode(node.children, id);
+        if (found) return found;
+      }
+      return undefined;
+    }
+
+    // Use appropriate tree based on whether viewing remote
+    const tree = isViewingRemote ? remoteSubagentTree : subagentTree;
+
+    // Find subagent state from tree
+    const subagentNode = findSubagentNode(tree, selectedSubagentId);
+
+    // For remote instances, we can only show info from the tree node
+    // (subagent output/details APIs are local-only)
+    if (isViewingRemote) {
+      if (subagentNode) {
+        const { state } = subagentNode;
+        const lines: string[] = [];
+        lines.push(`═══ [${state.type}] ${state.description} ═══`);
+        lines.push('');
+
+        // Status and timing
+        const statusLine = `Status: ${state.status}`;
+        const durationLine = state.durationMs
+          ? `  |  Duration: ${state.durationMs < 1000 ? `${state.durationMs}ms` : `${Math.round(state.durationMs / 1000)}s`}`
+          : '';
+        lines.push(statusLine + durationLine);
+
+        // Child subagents
+        if (state.children.length > 0) {
+          lines.push(`Child subagents: ${state.children.length}`);
+        }
+
+        lines.push('');
+
+        // Status message
+        if (state.status === 'running') {
+          lines.push('─── Status ───');
+          lines.push('Subagent is currently running...');
+        } else if (state.status === 'completed') {
+          lines.push('─── Info ───');
+          lines.push('Detailed subagent output not available for remote instances.');
+          lines.push('View the main task output for full iteration results.');
+        } else if (state.status === 'error') {
+          lines.push('─── Error ───');
+          lines.push('Subagent encountered an error');
+        }
+
+        return lines.join('\n');
+      }
+      return `[Subagent ${selectedSubagentId}]\nNo output available for remote instance`;
+    }
+
+    // Local instance: get subagent-specific output from engine
+    const subagentOutput = engine.getSubagentOutput(selectedSubagentId);
+
+    // Build rich output based on subagent state
+    // We have: metadata, prompt, result, child subagents, timing
+    if (subagentNode) {
+      const { state } = subagentNode;
+      const details = engine.getSubagentDetails(selectedSubagentId);
+
+      // Build header
+      const lines: string[] = [];
+      lines.push(`═══ [${state.type}] ${state.description} ═══`);
+      lines.push('');
+
+      // Status and timing
+      const statusLine = `Status: ${state.status}`;
+      const durationLine = state.durationMs
+        ? `  |  Duration: ${state.durationMs < 1000 ? `${state.durationMs}ms` : `${Math.round(state.durationMs / 1000)}s`}`
+        : '';
+      lines.push(statusLine + durationLine);
+
+      // Timestamps
+      if (details) {
+        const startTime = new Date(details.spawnedAt).toLocaleTimeString();
+        const endTime = details.endedAt ? new Date(details.endedAt).toLocaleTimeString() : 'running';
+        lines.push(`Started: ${startTime}  |  Ended: ${endTime}`);
+      }
+
+      // Child subagents
+      if (state.children.length > 0) {
+        lines.push(`Child subagents: ${state.children.length}`);
+      }
+
+      lines.push('');
+
+      // Show the prompt/task given to the subagent
+      if (details?.prompt) {
+        lines.push('─── Task Given ───');
+        lines.push(details.prompt);
+        lines.push('');
+      }
+
+      // Show the result if available
+      if (subagentOutput && subagentOutput.trim().length > 0) {
+        lines.push('─── Result ───');
+        lines.push(subagentOutput);
+      } else if (state.status === 'running') {
+        lines.push('─── Status ───');
+        lines.push('Subagent is currently running...');
+      } else if (state.status === 'completed') {
+        lines.push('─── Result ───');
+        lines.push('(Subagent completed without returning detailed output)');
+      } else if (state.status === 'error') {
+        lines.push('─── Error ───');
+        lines.push('Subagent encountered an error');
+      }
+
+      return lines.join('\n');
+    }
+
+    // Subagent not found in tree
+    if (subagentOutput && subagentOutput.trim().length > 0) {
+      return `[Subagent]\n\n${subagentOutput}`;
+    }
+
+    return `[Subagent ${selectedSubagentId}]\nNo output available`;
+  }, [selectedSubagentId, currentTaskId, remoteCurrentTaskId, selectedTask?.id, selectedIteration?.task?.id, viewMode, selectedTaskIteration.output, engine, subagentTree, remoteSubagentTree, isViewingRemote]);
 
   // Compute historic agent/model for display when viewing completed iterations
   // Falls back to current values if viewing a live iteration or no historic data available
@@ -1365,6 +2231,15 @@ export function RunApp({
     return () => clearTimeout(timer);
   }, [copyFeedback]);
 
+  // Auto-dismiss info feedback after 4 seconds (longer for reading)
+  useEffect(() => {
+    if (!infoFeedback) return;
+    const timer = setTimeout(() => {
+      setInfoFeedback(null);
+    }, 4000);
+    return () => clearTimeout(timer);
+  }, [infoFeedback]);
+
   return (
     <box
       style={{
@@ -1374,37 +2249,65 @@ export function RunApp({
         backgroundColor: colors.bg.primary,
       }}
     >
+      {/* Tab Bar - instance navigation (local + remotes) */}
+      {instanceTabs && instanceTabs.length > 1 && (
+        <TabBar
+          tabs={instanceTabs}
+          selectedIndex={selectedTabIndex}
+        />
+      )}
+
       {/* Header - compact design showing essential info + agent/tracker + fallback status */}
       <Header
-        status={status}
+        status={displayStatus}
         elapsedTime={elapsedTime}
-        currentTaskId={currentTaskId}
-        currentTaskTitle={currentTaskTitle}
+        currentTaskId={displayCurrentTaskId}
+        currentTaskTitle={displayCurrentTaskTitle}
         completedTasks={completedTasks}
         totalTasks={totalTasks}
-        agentName={agentName}
-        trackerName={trackerName}
-        activeAgentState={activeAgentState}
-        rateLimitState={rateLimitState}
-        currentIteration={currentIteration}
-        maxIterations={maxIterations}
-        currentModel={currentModel}
-        sandboxConfig={sandboxConfig}
-        resolvedSandboxMode={resolvedSandboxMode}
+        agentName={displayAgentName}
+        trackerName={displayTrackerName}
+        activeAgentState={isViewingRemote ? remoteActiveAgent : activeAgentState}
+        rateLimitState={isViewingRemote ? remoteRateLimitState : rateLimitState}
+        currentIteration={displayCurrentIteration}
+        maxIterations={displayMaxIterations}
+        currentModel={displayModel}
+        sandboxConfig={isViewingRemote ? remoteSandboxConfig : sandboxConfig}
+        resolvedSandboxMode={isViewingRemote ? remoteResolvedSandboxMode : resolvedSandboxMode}
+        remoteInfo={
+          isViewingRemote && instanceTabs?.[selectedTabIndex]
+            ? {
+                name: instanceTabs[selectedTabIndex].alias ?? instanceTabs[selectedTabIndex].label,
+                host: instanceTabs[selectedTabIndex].host ?? 'unknown',
+                port: instanceTabs[selectedTabIndex].port ?? 0,
+              }
+            : undefined
+        }
       />
 
       {/* Progress Dashboard - toggleable with 'd' key */}
       {showDashboard && (
         <ProgressDashboard
-          status={status}
+          status={displayStatus}
           agentName={displayAgentName}
-          currentModel={currentModel}
-          trackerName={trackerName || 'beads'}
+          currentModel={displayModel}
+          trackerName={displayTrackerName || 'beads'}
           epicName={epicName}
-          currentTaskId={currentTaskId}
-          currentTaskTitle={currentTaskTitle}
-          sandboxConfig={sandboxConfig}
-          resolvedSandboxMode={resolvedSandboxMode}
+          currentTaskId={displayCurrentTaskId}
+          currentTaskTitle={displayCurrentTaskTitle}
+          sandboxConfig={isViewingRemote ? remoteSandboxConfig : sandboxConfig}
+          resolvedSandboxMode={isViewingRemote ? remoteResolvedSandboxMode : resolvedSandboxMode}
+          remoteInfo={
+            isViewingRemote && instanceTabs?.[selectedTabIndex]
+              ? {
+                  name: instanceTabs[selectedTabIndex].alias ?? instanceTabs[selectedTabIndex].label,
+                  host: instanceTabs[selectedTabIndex].host ?? 'unknown',
+                  port: instanceTabs[selectedTabIndex].port ?? 0,
+                }
+              : undefined
+          }
+          autoCommit={isViewingRemote ? remoteAutoCommit : storedConfig?.autoCommit}
+          gitInfo={isViewingRemote ? remoteGitInfo : localGitInfo}
         />
       )}
 
@@ -1434,30 +2337,41 @@ export function RunApp({
           />
         ) : viewMode === 'tasks' ? (
           <>
-            <LeftPanel tasks={displayedTasks} selectedIndex={selectedIndex} />
+            <LeftPanel
+              tasks={displayedTasks}
+              selectedIndex={selectedIndex}
+              isFocused={!subagentPanelVisible || focusedPane === 'output'}
+              isViewingRemote={isViewingRemote}
+              remoteConnectionStatus={instanceTabs?.[selectedTabIndex]?.status}
+              remoteAlias={instanceTabs?.[selectedTabIndex]?.alias}
+            />
             <RightPanel
               selectedTask={selectedTask}
               currentIteration={selectedTaskIteration.iteration}
-              iterationOutput={selectedTaskIteration.output}
+              iterationOutput={displayIterationOutput}
               iterationSegments={selectedTaskIteration.segments}
               viewMode={detailsViewMode}
               iterationTiming={selectedTaskIteration.timing}
               agentName={displayAgentInfo.agent}
               currentModel={displayAgentInfo.model}
-              subagentDetailLevel={subagentDetailLevel}
-              subagentTree={subagentTree}
-              collapsedSubagents={collapsedSubagents}
-              focusedSubagentId={focusedSubagentId}
-              onSubagentToggle={handleSubagentToggle}
               promptPreview={promptPreview}
               templateSource={templateSource}
+              isViewingRemote={isViewingRemote}
+              remoteConnectionStatus={instanceTabs?.[selectedTabIndex]?.status}
+              remoteAlias={instanceTabs?.[selectedTabIndex]?.alias}
             />
             {/* Subagent Tree Panel - shown on right side when toggled with 'T' key */}
             {subagentPanelVisible && (
               <SubagentTreePanel
-                tree={subagentTree}
+                tree={isViewingRemote ? remoteSubagentTree : subagentTree}
                 activeSubagentId={focusedSubagentId}
                 width={45}
+                currentTaskId={displayCurrentTaskId}
+                currentTaskTitle={displayCurrentTaskTitle}
+                currentTaskStatus={displayStatus === 'executing' ? 'running' : displayStatus === 'complete' ? 'completed' : displayStatus === 'error' ? 'error' : 'idle'}
+                selectedId={selectedSubagentId}
+                onSelect={setSelectedSubagentId}
+                isFocused={focusedPane === 'subagentTree'}
               />
             )}
           </>
@@ -1474,26 +2388,30 @@ export function RunApp({
             <RightPanel
               selectedTask={selectedTask}
               currentIteration={selectedTaskIteration.iteration}
-              iterationOutput={selectedTaskIteration.output}
+              iterationOutput={displayIterationOutput}
               iterationSegments={selectedTaskIteration.segments}
               viewMode={detailsViewMode}
               iterationTiming={selectedTaskIteration.timing}
               agentName={displayAgentInfo.agent}
               currentModel={displayAgentInfo.model}
-              subagentDetailLevel={subagentDetailLevel}
-              subagentTree={subagentTree}
-              collapsedSubagents={collapsedSubagents}
-              focusedSubagentId={focusedSubagentId}
-              onSubagentToggle={handleSubagentToggle}
               promptPreview={promptPreview}
               templateSource={templateSource}
+              isViewingRemote={isViewingRemote}
+              remoteConnectionStatus={instanceTabs?.[selectedTabIndex]?.status}
+              remoteAlias={instanceTabs?.[selectedTabIndex]?.alias}
             />
             {/* Subagent Tree Panel - shown on right side when toggled with 'T' key */}
             {subagentPanelVisible && (
               <SubagentTreePanel
-                tree={subagentTree}
+                tree={isViewingRemote ? remoteSubagentTree : subagentTree}
                 activeSubagentId={focusedSubagentId}
                 width={45}
+                currentTaskId={displayCurrentTaskId}
+                currentTaskTitle={displayCurrentTaskTitle}
+                currentTaskStatus={displayStatus === 'executing' ? 'running' : displayStatus === 'complete' ? 'completed' : displayStatus === 'error' ? 'error' : 'idle'}
+                selectedId={selectedSubagentId}
+                onSelect={setSelectedSubagentId}
+                isFocused={focusedPane === 'subagentTree'}
               />
             )}
           </>
@@ -1503,13 +2421,33 @@ export function RunApp({
       {/* Footer */}
       <Footer />
 
+      {/* Subagent activity indicator - shows when panel is hidden but subagents are running */}
+      {!subagentPanelVisible && runningSubagentCount > 0 && (
+        <box
+          style={{
+            position: 'absolute',
+            bottom: 2,
+            right: 2,
+            paddingLeft: 1,
+            paddingRight: 1,
+            backgroundColor: colors.bg.tertiary,
+            border: true,
+            borderColor: colors.status.info,
+          }}
+        >
+          <text fg={colors.status.info}>
+            ▸ {runningSubagentCount} subagent{runningSubagentCount > 1 ? 's' : ''} running (T to show)
+          </text>
+        </box>
+      )}
+
       {/* Copy feedback toast - positioned at bottom right */}
       {copyFeedback && (
         <box
           style={{
             position: 'absolute',
             bottom: 2,
-            right: 2,
+            right: copyFeedback && !subagentPanelVisible && runningSubagentCount > 0 ? 40 : 2,
             paddingLeft: 1,
             paddingRight: 1,
             backgroundColor: colors.bg.tertiary,
@@ -1520,6 +2458,39 @@ export function RunApp({
           <text fg={colors.status.success}>✓ {copyFeedback}</text>
         </box>
       )}
+
+      {/* Info feedback toast - positioned at bottom center */}
+      {infoFeedback && (
+        <box
+          style={{
+            position: 'absolute',
+            bottom: 2,
+            left: Math.max(2, Math.floor((width - infoFeedback.length - 6) / 2)),
+            paddingLeft: 1,
+            paddingRight: 1,
+            backgroundColor: colors.bg.tertiary,
+            border: true,
+            borderColor: colors.fg.muted,
+          }}
+        >
+          <text fg={colors.fg.secondary}>ℹ {infoFeedback}</text>
+        </box>
+      )}
+
+      {/* Connection toast - shows reconnection events (US-5) */}
+      {connectionToast && (() => {
+        const formatted = formatConnectionToast(connectionToast);
+        return (
+          <Toast
+            visible={true}
+            message={formatted.message}
+            icon={formatted.icon}
+            variant={formatted.variant}
+            bottom={4}
+            right={2}
+          />
+        );
+      })()}
 
       {/* Interrupt Confirmation Dialog */}
       <ConfirmationDialog
@@ -1552,6 +2523,16 @@ export function RunApp({
         />
       )}
 
+      {/* Remote Config View */}
+      <RemoteConfigView
+        visible={showRemoteConfig}
+        remoteAlias={isViewingRemote ? (instanceTabs?.[selectedTabIndex]?.alias ?? instanceTabs?.[selectedTabIndex]?.label ?? 'remote') : 'Local'}
+        configData={remoteConfigData}
+        loading={remoteConfigLoading}
+        error={remoteConfigError}
+        onClose={() => setShowRemoteConfig(false)}
+      />
+
       {/* Epic Loader Overlay */}
       <EpicLoaderOverlay
         visible={showEpicLoader}
@@ -1578,6 +2559,76 @@ export function RunApp({
             }
           }
         }}
+      />
+
+      {/* Remote Management Overlay (add/edit/delete) */}
+      <RemoteManagementOverlay
+        visible={showRemoteManagement}
+        mode={remoteManagementMode}
+        existingRemote={editingRemote}
+        onSave={async (data) => {
+          if (!instanceManager) {
+            throw new Error('Instance manager not available');
+          }
+
+          if (remoteManagementMode === 'add') {
+            // Add new remote to config
+            const result = await addRemote(data.alias, data.host, data.port, data.token);
+            if (!result.success) {
+              throw new Error(result.error || 'Failed to add remote');
+            }
+            // Connect to the new remote via InstanceManager
+            await instanceManager.addAndConnectRemote(data.alias, data.host, data.port, data.token);
+            // Select the new tab
+            const newIndex = instanceManager.getTabIndexByAlias(data.alias);
+            if (newIndex !== -1 && onSelectTab) {
+              onSelectTab(newIndex);
+            }
+          } else {
+            // Edit existing remote
+            // If alias changed, we need to remove old and add new
+            if (editingRemote && editingRemote.alias !== data.alias) {
+              // Remove old config
+              await removeRemote(editingRemote.alias);
+              // Remove old tab
+              instanceManager.removeTab(editingRemote.alias);
+              // Add new config
+              const result = await addRemote(data.alias, data.host, data.port, data.token);
+              if (!result.success) {
+                throw new Error(result.error || 'Failed to add remote');
+              }
+              // Connect with new alias
+              await instanceManager.addAndConnectRemote(data.alias, data.host, data.port, data.token);
+            } else {
+              // Same alias - just update config and reconnect
+              await removeRemote(data.alias);
+              const result = await addRemote(data.alias, data.host, data.port, data.token);
+              if (!result.success) {
+                throw new Error(result.error || 'Failed to update remote');
+              }
+              await instanceManager.reconnectRemote(data.alias, data.host, data.port, data.token);
+            }
+          }
+          setShowRemoteManagement(false);
+        }}
+        onDelete={async (alias) => {
+          if (!instanceManager) {
+            throw new Error('Instance manager not available');
+          }
+          // Remove from config
+          const result = await removeRemote(alias);
+          if (!result.success) {
+            throw new Error(result.error || 'Failed to remove remote');
+          }
+          // Remove tab and disconnect
+          instanceManager.removeTab(alias);
+          // Switch to local tab (index 0)
+          if (onSelectTab) {
+            onSelectTab(0);
+          }
+          setShowRemoteManagement(false);
+        }}
+        onClose={() => setShowRemoteManagement(false)}
       />
     </box>
   );

@@ -128,30 +128,67 @@ function getTrackerOptions(cwd: string): TrackerOption[] {
   ]
 }`;
 
+  const wrongSchemaExample = `{
+  "prd": { ... },           // WRONG - no wrapper object!
+  "tasks": [ ... ],         // WRONG - use "userStories" not "tasks"
+  "metadata": { ... },      // WRONG - top-level metadata not supported
+  "overview": { ... },      // WRONG - not part of schema
+  "migration_strategy": {}, // WRONG - not part of schema
+  "phases": [ ... ]         // WRONG - use flat userStories array
+}`;
+
   return [
     {
       key: '1',
       name: 'JSON (prd.json)',
       skillPrompt: `Convert this PRD to prd.json format using the ralph-tui-create-json skill.
 
-CRITICAL: The output MUST use this EXACT schema:
+## CRITICAL SCHEMA REQUIREMENTS
+
+The output JSON file MUST be a FLAT object at the root level with this EXACT structure:
 
 ${jsonSchemaExample}
 
-Required fields for each userStory:
-- "id": string (e.g., "US-001")
-- "title": string
+## FORBIDDEN PATTERNS - DO NOT USE THESE
+
+The following patterns will cause validation errors and MUST NOT be used:
+
+${wrongSchemaExample}
+
+## FIELD REQUIREMENTS
+
+Required root-level fields:
+- "name": string (project/feature name)
+- "userStories": array of story objects
+
+Required fields for EACH userStory:
+- "id": string (e.g., "US-001", "US-002")
+- "title": string (short descriptive title)
 - "passes": boolean (MUST be false for new tasks)
-- "dependsOn": array of story IDs
+- "dependsOn": array of story IDs (can be empty array [])
 
-DO NOT use:
-- "tasks" array (use "userStories" instead)
-- "prd" wrapper object
-- "status" field (use "passes": boolean instead)
-- "subtasks" (not supported)
-- "estimated_hours" (not supported)
+Optional fields for userStory:
+- "description": string
+- "acceptanceCriteria": array of strings
+- "priority": number (1 = highest)
+- "labels": array of strings
+- "notes": string
 
-The output file MUST be saved to: tasks/prd.json`,
+## VALIDATION RULES
+
+1. NO wrapper objects - "name" and "userStories" must be at ROOT level
+2. NO "prd" field - this is a common AI hallucination, DO NOT USE IT
+3. NO "tasks" field - the array is called "userStories"
+4. NO "status" field - use "passes": boolean instead
+5. NO "subtasks" - not supported by the tracker
+6. NO "estimated_hours" or time estimates - not supported
+7. NO nested structures like "phases" or "migration_strategy"
+
+## OUTPUT
+
+Save the file to: tasks/prd.json
+
+Transform any complex PRD structure (phases, milestones, etc.) into a FLAT list of userStories.`,
       available: true,
     },
     {
@@ -216,7 +253,7 @@ export function PrdChatApp({
   agent,
   cwd = process.cwd(),
   outputDir = 'tasks',
-  timeout = 180000,
+  timeout = 0,
   prdSkill,
   prdSkillSource,
   onComplete,

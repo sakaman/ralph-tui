@@ -101,11 +101,33 @@ function buildIndentMap(tasks: TaskItem[]): Map<string, number> {
 }
 
 /**
+ * Connection status for remote instances
+ */
+type ConnectionStatus = 'connected' | 'connecting' | 'disconnected' | 'reconnecting';
+
+/**
  * LeftPanel component showing the scrollable task list
  * Displays tasks with hierarchical indentation based on parent/child relationships
  * Wrapped in React.memo to prevent re-renders when only sibling state changes (e.g., detailsViewMode)
  */
-export const LeftPanel = memo(function LeftPanel({ tasks, selectedIndex, width = 45 }: LeftPanelProps & { width?: number }): ReactNode {
+export const LeftPanel = memo(function LeftPanel({
+  tasks,
+  selectedIndex,
+  width = 45,
+  isFocused = true,
+  isViewingRemote = false,
+  remoteConnectionStatus,
+  remoteAlias,
+}: LeftPanelProps & {
+  width?: number;
+  isFocused?: boolean;
+  /** Whether currently viewing a remote instance */
+  isViewingRemote?: boolean;
+  /** Connection status when viewing remote */
+  remoteConnectionStatus?: ConnectionStatus;
+  /** Alias of the remote being viewed */
+  remoteAlias?: string;
+}): ReactNode {
   // Calculate max width for task row content (panel width minus padding and border)
   const maxRowWidth = Math.max(20, width - 4);
 
@@ -123,7 +145,7 @@ export const LeftPanel = memo(function LeftPanel({ tasks, selectedIndex, width =
         flexDirection: 'column',
         backgroundColor: colors.bg.primary,
         border: true,
-        borderColor: colors.border.normal,
+        borderColor: isFocused ? colors.accent.primary : colors.border.normal,
       }}
     >
       <scrollbox
@@ -133,8 +155,23 @@ export const LeftPanel = memo(function LeftPanel({ tasks, selectedIndex, width =
         }}
       >
         {tasks.length === 0 ? (
-          <box style={{ padding: 1 }}>
-            <text fg={colors.fg.muted}>No tasks loaded</text>
+          <box style={{ padding: 1, flexDirection: 'column' }}>
+            {isViewingRemote && remoteConnectionStatus !== 'connected' ? (
+              <>
+                <text fg={colors.fg.muted}>
+                  {remoteConnectionStatus === 'connecting' && 'Connecting...'}
+                  {remoteConnectionStatus === 'reconnecting' && 'Reconnecting...'}
+                  {remoteConnectionStatus === 'disconnected' && 'Not connected'}
+                </text>
+                {remoteConnectionStatus === 'disconnected' && remoteAlias && (
+                  <text fg={colors.fg.dim}>
+                    {'\n'}Remote "{remoteAlias}" is offline
+                  </text>
+                )}
+              </>
+            ) : (
+              <text fg={colors.fg.muted}>No tasks loaded</text>
+            )}
           </box>
         ) : (
           tasks.map((task, index) => (

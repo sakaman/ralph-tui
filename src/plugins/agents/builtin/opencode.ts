@@ -19,6 +19,84 @@ import type {
 } from '../types.js';
 
 /**
+ * Callbacks for the JSONL streaming buffer.
+ */
+export interface JsonlBufferCallbacks {
+  /** Called when a JSONL message is parsed (for subagent tracing) */
+  onJsonlMessage?: (message: Record<string, unknown>) => void;
+  /** Called with formatted display events */
+  onDisplayEvents?: (events: AgentDisplayEvent[]) => void;
+}
+
+/**
+ * State object for JSONL streaming buffer.
+ * Accumulates partial data and emits complete lines.
+ */
+export interface JsonlStreamingBuffer {
+  /** Push new data into the buffer, processing any complete lines */
+  push: (data: string) => void;
+  /** Flush any remaining buffered content (call on stream end) */
+  flush: () => void;
+}
+
+/**
+ * Create a streaming buffer for OpenCode JSONL output.
+ * Handles partial chunks and emits complete lines for processing.
+ *
+ * This is exported for testability - the execute() method uses this internally.
+ */
+export function createOpenCodeJsonlBuffer(
+  callbacks: JsonlBufferCallbacks
+): JsonlStreamingBuffer {
+  let buffer = '';
+
+  const processLine = (line: string): void => {
+    const trimmed = line.trim();
+    if (!trimmed) return;
+
+    // Parse raw JSONL lines and forward to onJsonlMessage for subagent tracing
+    if (callbacks.onJsonlMessage && trimmed.startsWith('{')) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        callbacks.onJsonlMessage(parsed);
+      } catch {
+        // Not valid JSON, skip
+      }
+    }
+
+    // Process for display events
+    const events = parseOpenCodeJsonLine(trimmed);
+    if (events.length > 0 && callbacks.onDisplayEvents) {
+      callbacks.onDisplayEvents(events);
+    }
+  };
+
+  return {
+    push: (data: string): void => {
+      buffer += data;
+
+      // If no newline, wait for more data
+      if (!buffer.includes('\n')) return;
+
+      const lines = buffer.split('\n');
+      buffer = lines.pop() ?? ''; // Keep the last partial line in buffer
+
+      for (const line of lines) {
+        processLine(line);
+      }
+    },
+
+    flush: (): void => {
+      // Process any remaining content that didn't end with a newline
+      if (buffer.length > 0) {
+        processLine(buffer);
+        buffer = '';
+      }
+    },
+  };
+}
+
+/**
  * Parse opencode JSON line into standardized display events.
  * Returns AgentDisplayEvent[] - the shared processAgentEvents decides what to show.
  *
@@ -90,18 +168,6 @@ function parseOpenCodeJsonLine(jsonLine: string): AgentDisplayEvent[] {
 }
 
 /**
- * Parse opencode JSON stream output into display events.
- */
-function parseOpenCodeOutputToEvents(data: string): AgentDisplayEvent[] {
-  const allEvents: AgentDisplayEvent[] = [];
-  for (const line of data.split('\n')) {
-    const events = parseOpenCodeJsonLine(line.trim());
-    allEvents.push(...events);
-  }
-  return allEvents;
-}
-
-/**
  * OpenCode agent plugin implementation.
  * Uses the `opencode run` command for non-interactive AI coding tasks.
  *
@@ -126,7 +192,11 @@ export class OpenCodeAgentPlugin extends BaseAgentPlugin {
     supportsStreaming: true,
     supportsInterrupt: true,
     supportsFileContext: true,
-    supportsSubagentTracing: false,
+    supportsSubagentTracing: true,
+    skillsPaths: {
+      personal: '~/.config/opencode/skills',
+      repo: '.opencode/skills',
+    },
   };
 
   /** AI provider (any string, validated by OpenCode CLI) */
@@ -191,6 +261,9 @@ export class OpenCodeAgentPlugin extends BaseAgentPlugin {
       };
     }
 
+    // Store the resolved path for execute() to use
+    this.commandPath = findResult.path;
+
     // Verify the binary works by running --version
     const versionResult = await this.runVersion(findResult.path);
 
@@ -226,9 +299,10 @@ export class OpenCodeAgentPlugin extends BaseAgentPlugin {
     command: string
   ): Promise<{ success: boolean; version?: string; error?: string }> {
     return new Promise((resolve) => {
+      const useShell = process.platform === 'win32';
       const proc = spawn(command, ['--version'], {
         stdio: ['ignore', 'pipe', 'pipe'],
-        shell: true,
+        shell: useShell,
       });
 
       let stdout = '';
@@ -318,7 +392,7 @@ export class OpenCodeAgentPlugin extends BaseAgentPlugin {
   }
 
   protected buildArgs(
-    prompt: string,
+    _prompt: string,
     files?: AgentFileContext[],
     _options?: AgentExecuteOptions
   ): string[] {
@@ -353,46 +427,70 @@ export class OpenCodeAgentPlugin extends BaseAgentPlugin {
       }
     }
 
-    // Add prompt as positional argument
-    // opencode run expects the message as positional args, not stdin
-    args.push(prompt);
+    // NOTE: Prompt is NOT added here - it's passed via stdin to avoid
+    // shell interpretation of special characters on Windows where shell: true
+    // is required for wrapper script execution.
 
     return args;
   }
 
   /**
+   * Provide the prompt via stdin instead of command args.
+   * This avoids shell interpretation issues with special characters in prompts
+   * on Windows where shell: true is required for wrapper script execution.
+   */
+  protected override getStdinInput(
+    prompt: string,
+    _files?: AgentFileContext[],
+    _options?: AgentExecuteOptions
+  ): string {
+    return prompt;
+  }
+
+  /**
    * Override execute to parse opencode JSON output.
    * Wraps the onStdout/onStdoutSegments callbacks to parse JSONL events and extract displayable content.
+   * Also forwards raw JSONL messages to onJsonlMessage for subagent tracing.
    */
   override execute(
     prompt: string,
     files?: AgentFileContext[],
     options?: AgentExecuteOptions
   ): AgentExecutionHandle {
+    // Create streaming buffer with callbacks for display and tracing
+    const streamingBuffer = createOpenCodeJsonlBuffer({
+      onJsonlMessage: options?.onJsonlMessage,
+      onDisplayEvents: (events) => {
+        // Call TUI-native segments callback if provided
+        if (options?.onStdoutSegments) {
+          const segments = processAgentEventsToSegments(events);
+          if (segments.length > 0) {
+            options.onStdoutSegments(segments);
+          }
+        }
+        // Also call legacy string callback if provided
+        if (options?.onStdout) {
+          const parsed = processAgentEvents(events);
+          if (parsed.length > 0) {
+            options.onStdout(parsed);
+          }
+        }
+      },
+    });
+
     // Wrap callbacks to parse JSON events
     const parsedOptions: AgentExecuteOptions = {
       ...options,
-      onStdout: (options?.onStdout || options?.onStdoutSegments)
-        ? (data: string) => {
-            const events = parseOpenCodeOutputToEvents(data);
-            if (events.length > 0) {
-              // Call TUI-native segments callback if provided
-              if (options?.onStdoutSegments) {
-                const segments = processAgentEventsToSegments(events);
-                if (segments.length > 0) {
-                  options.onStdoutSegments(segments);
-                }
-              }
-              // Also call legacy string callback if provided
-              if (options?.onStdout) {
-                const parsed = processAgentEvents(events);
-                if (parsed.length > 0) {
-                  options.onStdout(parsed);
-                }
-              }
-            }
-          }
+      onStdout: (options?.onStdout || options?.onStdoutSegments || options?.onJsonlMessage)
+        ? (data: string) => streamingBuffer.push(data)
         : undefined,
+      // Wrap onEnd to flush any remaining buffered content
+      onEnd: (result) => {
+        // Flush buffer before calling original onEnd
+        streamingBuffer.flush();
+        // Call the original onEnd if provided
+        options?.onEnd?.(result);
+      },
     };
 
     return super.execute(prompt, files, parsedOptions);

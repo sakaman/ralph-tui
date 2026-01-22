@@ -54,16 +54,14 @@ Beads use `bd create` command:
 bd create --type=epic \
   --title="[Feature Name]" \
   --description="[Feature description from PRD]" \
-  --external-ref="prd:./tasks/feature-name-prd.md" \
-  --labels="ralph,feature"
+  --external-ref="prd:./tasks/feature-name-prd.md"
 
 # Create child bead (with quality gates in acceptance criteria)
 bd create \
   --parent=EPIC_ID \
   --title="[Story Title]" \
   --description="[Story description with acceptance criteria INCLUDING quality gates]" \
-  --priority=[1-4] \
-  --labels="ralph,task"
+  --priority=[1-4]
 ```
 
 ---
@@ -161,10 +159,9 @@ Each bead's description should include acceptance criteria with:
 3. **First story**: No dependencies (creates foundation)
 4. **Subsequent stories**: Depend on their predecessors (UI depends on backend, etc.)
 5. **Priority**: Based on dependency order, then document order (0=critical, 2=medium, 4=backlog)
-6. **Labels**: Epic gets `ralph,feature`; Tasks get `ralph,task`
-7. **All stories**: `status: "open"`
-8. **Acceptance criteria**: Story criteria + quality gates appended
-9. **UI stories**: Also append UI-specific gates (browser verification)
+6. **All stories**: `status: "open"`
+7. **Acceptance criteria**: Story criteria + quality gates appended
+8. **UI stories**: Also append UI-specific gates (browser verification)
 
 ---
 
@@ -237,8 +234,7 @@ For UI stories, also include:
 bd create --type=epic \
   --title="Friends Outreach Track" \
   --description="Warm outreach for deck feedback" \
-  --external-ref="prd:./tasks/friends-outreach-prd.md" \
-  --labels="ralph,feature"
+  --external-ref="prd:./tasks/friends-outreach-prd.md"
 
 # US-001: No deps (first - creates schema)
 bd create --parent=ralph-tui-abc \
@@ -250,8 +246,7 @@ bd create --parent=ralph-tui-abc \
 - [ ] Generate and run migration successfully
 - [ ] pnpm typecheck passes
 - [ ] pnpm lint passes" \
-  --priority=1 \
-  --labels="ralph,task"
+  --priority=1
 
 # US-002: UI story (gets browser verification too)
 bd create --parent=ralph-tui-abc \
@@ -265,8 +260,7 @@ bd create --parent=ralph-tui-abc \
 - [ ] pnpm typecheck passes
 - [ ] pnpm lint passes
 - [ ] Verify in browser using dev-browser skill" \
-  --priority=2 \
-  --labels="ralph,task"
+  --priority=2
 
 # Add dependency: US-002 depends on US-001
 bd dep add ralph-tui-002 ralph-tui-001
@@ -282,8 +276,7 @@ bd create --parent=ralph-tui-abc \
 - [ ] pnpm typecheck passes
 - [ ] pnpm lint passes
 - [ ] Verify in browser using dev-browser skill" \
-  --priority=3 \
-  --labels="ralph,task"
+  --priority=3
 
 # Add dependency: US-003 depends on US-002
 bd dep add ralph-tui-003 ralph-tui-002

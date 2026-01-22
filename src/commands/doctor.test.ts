@@ -13,13 +13,30 @@ import {
   mock,
   spyOn,
 } from 'bun:test';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+// Types for mock results
+interface MockDetectResult {
+  available: boolean;
+  version?: string;
+  executablePath?: string;
+  error?: string;
+}
+
+interface MockPreflightResult {
+  success: boolean;
+  durationMs?: number;
+  error?: string;
+}
+
 // Store mock implementations that can be changed per test
-let mockDetectResult = { available: true, version: '1.0.0', executablePath: '/usr/bin/mock' };
-let mockPreflightResult = { success: true, durationMs: 100 };
+let mockDetectResult: MockDetectResult = { available: true, version: '1.0.0', executablePath: '/usr/bin/mock' };
+let mockPreflightResult: MockPreflightResult = { success: true, durationMs: 100 };
+
+// Capture the last config passed to getInstance for verification
+let lastGetInstanceConfig: unknown = null;
 
 // Mock agent instance
 const createMockAgentInstance = () => ({
@@ -33,7 +50,10 @@ const createMockAgentInstance = () => ({
 // Mock the agent registry
 mock.module('../plugins/agents/registry.js', () => ({
   getAgentRegistry: () => ({
-    getInstance: () => Promise.resolve(createMockAgentInstance()),
+    getInstance: (config: unknown) => {
+      lastGetInstanceConfig = config;
+      return Promise.resolve(createMockAgentInstance());
+    },
     hasPlugin: (name: string) => name === 'claude' || name === 'opencode',
     registerBuiltin: () => {},
     getRegisteredPlugins: () => [
@@ -187,7 +207,7 @@ describe('doctor command', () => {
     });
 
     test('reports unhealthy when detection fails', async () => {
-      mockDetectResult = { available: false, error: 'CLI not found' } as any;
+      mockDetectResult = { available: false, error: 'CLI not found' };
 
       try {
         await executeDoctorCommand(['--json', '--cwd', tempDir]);
@@ -204,7 +224,7 @@ describe('doctor command', () => {
     });
 
     test('reports unhealthy when preflight fails', async () => {
-      mockPreflightResult = { success: false, error: 'No API key configured' } as any;
+      mockPreflightResult = { success: false, error: 'No API key configured' };
 
       try {
         await executeDoctorCommand(['--json', '--cwd', tempDir]);
@@ -270,7 +290,7 @@ describe('doctor command', () => {
     });
 
     test('exits with code 1 for unhealthy agent', async () => {
-      mockDetectResult = { available: false, error: 'Not found' } as any;
+      mockDetectResult = { available: false, error: 'Not found' };
 
       try {
         await executeDoctorCommand(['--json', '--cwd', tempDir]);
@@ -354,5 +374,98 @@ describe('doctor result structure', () => {
     expect(jsonLine).toBeDefined();
     const result = JSON.parse(jsonLine!) as DoctorResult;
     expect(result.preflight?.durationMs).toBe(250);
+  });
+});
+
+// Helper to write TOML config
+async function writeTomlConfig(path: string, config: Record<string, unknown>): Promise<void> {
+  const { stringify } = await import('smol-toml');
+  const content = stringify(config);
+  await writeFile(path, content, 'utf-8');
+}
+
+describe('doctor config propagation', () => {
+  let tempDir: string;
+  let consoleLogSpy: ReturnType<typeof spyOn>;
+  let processExitSpy: ReturnType<typeof spyOn>;
+
+  beforeEach(async () => {
+    tempDir = await createTempDir();
+    lastGetInstanceConfig = null;
+    mockDetectResult = { available: true, version: '1.0.0', executablePath: '/usr/bin/mock' };
+    mockPreflightResult = { success: true, durationMs: 100 };
+
+    consoleLogSpy = spyOn(console, 'log').mockImplementation(() => {});
+    processExitSpy = spyOn(process, 'exit').mockImplementation(() => {
+      throw new Error('process.exit called');
+    });
+  });
+
+  afterEach(async () => {
+    await rm(tempDir, { recursive: true, force: true });
+    consoleLogSpy.mockRestore();
+    processExitSpy.mockRestore();
+  });
+
+  test('passes envExclude from config to agent getInstance', async () => {
+    // Create project config with envExclude
+    const projectConfigDir = join(tempDir, '.ralph-tui');
+    await mkdir(projectConfigDir, { recursive: true });
+    await writeTomlConfig(join(projectConfigDir, 'config.toml'), {
+      agent: 'claude',
+      envExclude: ['ANTHROPIC_API_KEY', '*_SECRET'],
+    });
+
+    try {
+      await executeDoctorCommand(['--json', '--cwd', tempDir]);
+    } catch {
+      // Expected - process.exit is called
+    }
+
+    // Verify envExclude was passed to getInstance
+    expect(lastGetInstanceConfig).toBeDefined();
+    const config = lastGetInstanceConfig as Record<string, unknown>;
+    expect(config.envExclude).toEqual(['ANTHROPIC_API_KEY', '*_SECRET']);
+  });
+
+  test('passes command from config to agent getInstance', async () => {
+    // Create project config with command
+    const projectConfigDir = join(tempDir, '.ralph-tui');
+    await mkdir(projectConfigDir, { recursive: true });
+    await writeTomlConfig(join(projectConfigDir, 'config.toml'), {
+      agent: 'claude',
+      command: 'custom-claude',
+    });
+
+    try {
+      await executeDoctorCommand(['--json', '--cwd', tempDir]);
+    } catch {
+      // Expected - process.exit is called
+    }
+
+    // Verify command was passed to getInstance
+    expect(lastGetInstanceConfig).toBeDefined();
+    const config = lastGetInstanceConfig as Record<string, unknown>;
+    expect(config.command).toBe('custom-claude');
+  });
+
+  test('handles config without envExclude', async () => {
+    // Create project config without envExclude
+    const projectConfigDir = join(tempDir, '.ralph-tui');
+    await mkdir(projectConfigDir, { recursive: true });
+    await writeTomlConfig(join(projectConfigDir, 'config.toml'), {
+      agent: 'claude',
+    });
+
+    try {
+      await executeDoctorCommand(['--json', '--cwd', tempDir]);
+    } catch {
+      // Expected - process.exit is called
+    }
+
+    // Verify getInstance was called (envExclude will be undefined)
+    expect(lastGetInstanceConfig).toBeDefined();
+    const config = lastGetInstanceConfig as Record<string, unknown>;
+    expect(config.envExclude).toBeUndefined();
   });
 });

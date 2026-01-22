@@ -96,10 +96,10 @@ Beads provides additional features like:
 
 ## Alternative: Using Skills Directly in Your Agent
 
-Prefer to stay in Claude Code or OpenCode? After running `ralph-tui setup`, you can use the installed skills directly in your agent:
+Prefer to stay in your agent's native interface? After running `ralph-tui setup`, you can use the installed skills directly:
 
 ```bash
-# In Claude Code or OpenCode, use slash commands:
+# Use slash commands in your agent:
 /ralph-tui-prd           # Create a PRD interactively
 /ralph-tui-create-json   # Convert PRD to prd.json
 /ralph-tui-create-beads  # Convert PRD to Beads issues
@@ -111,26 +111,45 @@ This approach lets you:
 - Keep your preferred agent interface
 
 <Callout type="tip">
-**Recommended hybrid workflow:** Create your PRD using `/ralph-tui-prd` in Claude Code where you can reference source files, then use `ralph-tui run` for autonomous task execution.
+**Recommended hybrid workflow:** Create your PRD using `/ralph-tui-prd` in your agent where you can reference source files, then use `ralph-tui run` for autonomous task execution.
 </Callout>
 
 ## Controlling Execution
 
 While Ralph is running, use these keyboard shortcuts:
 
+### Execution Control
+
 | Key | Action |
 |-----|--------|
 | `s` | Start execution |
 | `p` | Pause/Resume execution |
-| `+` / `=` | Add 10 iterations (extends max iterations) |
-| `-` / `_` | Remove 10 iterations (minimum of current iteration or 1) |
-| `d` | Toggle progress dashboard |
-| `o` | Cycle right panel views (details → output → prompt) |
-| `O` | Jump directly to prompt preview |
-| `h` | Toggle show/hide closed tasks |
-| `r` | Refresh task list from tracker |
+| `+` / `=` | Add 10 iterations |
+| `-` / `_` | Remove 10 iterations |
 | `q` | Quit |
 | `?` | Show all shortcuts |
+
+### Navigation
+
+| Key | Action |
+|-----|--------|
+| `j` / `↓` | Navigate down (task list, iteration history, or subagent tree) |
+| `k` / `↑` | Navigate up |
+| `Tab` | Switch focus between panels (when subagent tree is visible) |
+| `Enter` | Drill into selected item |
+| `Esc` | Go back / close dialog |
+
+### View Controls
+
+| Key | Action |
+|-----|--------|
+| `o` | Cycle right panel views (details → output → prompt) |
+| `O` | Jump directly to prompt preview |
+| `d` | Toggle progress dashboard |
+| `h` | Toggle show/hide closed tasks |
+| `r` | Refresh task list from tracker |
+| `T` | Toggle subagent tree panel |
+| `t` | Cycle subagent detail level (minimal → moderate → detailed) |
 
 ## Understanding the TUI
 
@@ -141,11 +160,15 @@ The terminal interface shows:
   - **Details**: Task metadata (title, description, dependencies)
   - **Output**: Live agent stdout/stderr
   - **Prompt**: Preview of the rendered prompt being sent to the agent
+- **Subagent Tree Panel** (toggle with `T`): Shows AI agent's spawned subagents in a tree hierarchy
+  - Displays subagent type, description, status, and duration
+  - Use `Tab` to switch focus, then `j/k` to navigate and see subagent details
+  - Shows the task prompt given to each subagent and its result
 - **Header**: Current iteration count (e.g., `[3/10]`) and active task
 - **Footer**: Available keyboard shortcuts
 
 <Callout type="tip">
-Use `O` to preview the exact prompt being sent to your AI agent. This is helpful for debugging templates or understanding what context the agent receives.
+Use `O` to preview the exact prompt being sent to your AI agent. Press `T` to see the subagent tree - this shows what autonomous subtasks the AI is spawning to complete your work.
 </Callout>
 
 ## Next Steps

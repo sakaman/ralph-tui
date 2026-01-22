@@ -79,6 +79,10 @@ export class ClaudeAgentPlugin extends BaseAgentPlugin {
     supportsFileContext: true,
     supportsSubagentTracing: true,
     structuredOutputFormat: 'jsonl',
+    skillsPaths: {
+      personal: '~/.claude/skills',
+      repo: '.claude/skills',
+    },
   };
 
   /** Print mode: text, json, or stream-json */
@@ -133,6 +137,9 @@ export class ClaudeAgentPlugin extends BaseAgentPlugin {
       };
     }
 
+    // Store the resolved path for execute() to use
+    this.commandPath = findResult.path;
+
     // Verify the binary works by running --version
     const versionResult = await this.runVersion(findResult.path);
 
@@ -169,9 +176,10 @@ export class ClaudeAgentPlugin extends BaseAgentPlugin {
     command: string
   ): Promise<{ success: boolean; version?: string; error?: string }> {
     return new Promise((resolve) => {
+      const useShell = process.platform === 'win32';
       const proc = spawn(command, ['--version'], {
         stdio: ['ignore', 'pipe', 'pipe'],
-        shell: true,
+        shell: useShell,
       });
 
       let stdout = '';
@@ -440,9 +448,26 @@ export class ClaudeAgentPlugin extends BaseAgentPlugin {
             // This callback is set up but actual segments come from wrapping onStdout below
           }
         : options?.onStdoutSegments,
-      // Legacy string callback or wrapper that calls both callbacks
-      onStdout: isStreamingJson && (options?.onStdout || options?.onStdoutSegments)
+      // Legacy string callback or wrapper that calls both callbacks and JSONL message callback
+      onStdout: isStreamingJson && (options?.onStdout || options?.onStdoutSegments || options?.onJsonlMessage)
         ? (data: string) => {
+            // Parse each line for JSONL messages and display events
+            for (const line of data.split('\n')) {
+              const trimmed = line.trim();
+              if (!trimmed) continue;
+
+              // Try to parse as JSON and call the raw JSONL message callback
+              if (options?.onJsonlMessage) {
+                try {
+                  const rawJson = JSON.parse(trimmed) as Record<string, unknown>;
+                  options.onJsonlMessage(rawJson);
+                } catch {
+                  // Not valid JSON, skip for JSONL callback
+                }
+              }
+            }
+
+            // Also parse for display events
             const events = this.parseClaudeOutputToEvents(data);
             if (events.length > 0) {
               // Call TUI-native segments callback if provided

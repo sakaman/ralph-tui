@@ -8,11 +8,9 @@
 import type { ReactNode } from 'react';
 import { useMemo, useState, useEffect } from 'react';
 import { colors, getTaskStatusColor, getTaskStatusIndicator } from '../theme.js';
-import type { RightPanelProps, DetailsViewMode, IterationTimingInfo, SubagentTreeNode, TaskPriority } from '../types.js';
-import type { SubagentDetailLevel } from '../../config/types.js';
+import type { RightPanelProps, DetailsViewMode, IterationTimingInfo, TaskPriority } from '../types.js';
 import { stripAnsiCodes, type FormattedSegment } from '../../plugins/agents/output-formatting.js';
 import { formatElapsedTime } from '../theme.js';
-import { SubagentSections } from './SubagentSection.js';
 import { parseAgentOutput } from '../output-parser.js';
 
 /**
@@ -140,9 +138,88 @@ function formatTimestamp(isoString: string): string {
 
 /**
  * Display when no task is selected.
- * Shows helpful setup instructions for new users.
+ * Shows connection status for remote instances, or setup instructions for local.
  */
-function NoSelection(): ReactNode {
+function NoSelection({
+  isViewingRemote = false,
+  remoteConnectionStatus,
+  remoteAlias,
+}: {
+  isViewingRemote?: boolean;
+  remoteConnectionStatus?: 'connected' | 'connecting' | 'disconnected' | 'reconnecting';
+  remoteAlias?: string;
+}): ReactNode {
+  // Show connection-specific help for remote instances
+  if (isViewingRemote && remoteConnectionStatus !== 'connected') {
+    return (
+      <box
+        style={{
+          flexGrow: 1,
+          flexDirection: 'column',
+          padding: 2,
+        }}
+      >
+        <box style={{ marginBottom: 1 }}>
+          <text fg={colors.status.warning}>
+            {remoteConnectionStatus === 'connecting' && '◐ Connecting...'}
+            {remoteConnectionStatus === 'reconnecting' && '⟳ Reconnecting...'}
+            {remoteConnectionStatus === 'disconnected' && '○ Not Connected'}
+          </text>
+        </box>
+
+        {remoteConnectionStatus === 'disconnected' && (
+          <>
+            <box style={{ marginBottom: 2 }}>
+              <text fg={colors.fg.secondary}>
+                Remote "{remoteAlias}" is not connected.
+              </text>
+            </box>
+            <box style={{ flexDirection: 'column', gap: 1 }}>
+              <text fg={colors.fg.muted}>Possible causes:</text>
+              <text fg={colors.fg.muted}>
+                <span fg={colors.accent.primary}>•</span> Remote server is not running
+              </text>
+              <text fg={colors.fg.muted}>
+                <span fg={colors.accent.primary}>•</span> Network connectivity issues
+              </text>
+              <text fg={colors.fg.muted}>
+                <span fg={colors.accent.primary}>•</span> Incorrect host/port configuration
+              </text>
+              <text fg={colors.fg.muted}>
+                <span fg={colors.accent.primary}>•</span> Authentication token mismatch
+              </text>
+            </box>
+            <box style={{ marginTop: 2, flexDirection: 'column', gap: 1 }}>
+              <text fg={colors.fg.muted}>Try:</text>
+              <text fg={colors.fg.muted}>
+                <span fg={colors.accent.primary}>•</span> Press{' '}
+                <span fg={colors.fg.secondary}>[</span> or{' '}
+                <span fg={colors.fg.secondary}>]</span> to switch tabs
+              </text>
+              <text fg={colors.fg.muted}>
+                <span fg={colors.accent.primary}>•</span> Press{' '}
+                <span fg={colors.fg.secondary}>e</span> to edit remote config
+              </text>
+              <text fg={colors.fg.muted}>
+                <span fg={colors.accent.primary}>•</span> Press{' '}
+                <span fg={colors.fg.secondary}>x</span> to delete this remote
+              </text>
+            </box>
+          </>
+        )}
+
+        {(remoteConnectionStatus === 'connecting' || remoteConnectionStatus === 'reconnecting') && (
+          <box style={{ marginTop: 1 }}>
+            <text fg={colors.fg.muted}>
+              Attempting to connect to {remoteAlias}...
+            </text>
+          </box>
+        )}
+      </box>
+    );
+  }
+
+  // Default: show setup instructions for local instance
   return (
     <box
       style={{
@@ -642,11 +719,6 @@ function TaskOutputView({
   iterationTiming,
   agentName,
   currentModel,
-  subagentDetailLevel = 'off',
-  subagentTree = [],
-  collapsedSubagents = new Set(),
-  focusedSubagentId,
-  onSubagentToggle,
 }: {
   task: NonNullable<RightPanelProps['selectedTask']>;
   currentIteration: number;
@@ -655,15 +727,9 @@ function TaskOutputView({
   iterationTiming?: IterationTimingInfo;
   agentName?: string;
   currentModel?: string;
-  subagentDetailLevel?: SubagentDetailLevel;
-  subagentTree?: SubagentTreeNode[];
-  collapsedSubagents?: Set<string>;
-  focusedSubagentId?: string;
-  onSubagentToggle?: (id: string) => void;
 }): ReactNode {
   const statusColor = getTaskStatusColor(task.status);
   const statusIndicator = getTaskStatusIndicator(task.status);
-  const hasSubagents = subagentTree.length > 0 && subagentDetailLevel !== 'off';
 
   // Check if we're live streaming
   const isLiveStreaming = iterationTiming?.isRunning === true;
@@ -720,29 +786,6 @@ function TaskOutputView({
       {/* Timing summary - shows start/end/duration */}
       <TimingSummary timing={iterationTiming} />
 
-      {/* Subagent sections (when tracing is enabled and subagents exist) */}
-      {hasSubagents && (
-        <box
-          title={`Subagents (${subagentTree.length})`}
-          style={{
-            marginBottom: 1,
-            border: true,
-            borderColor: colors.accent.secondary,
-            backgroundColor: colors.bg.tertiary,
-          }}
-        >
-          <scrollbox style={{ maxHeight: 10, padding: 1 }}>
-            <SubagentSections
-              tree={subagentTree}
-              collapsedSet={collapsedSubagents}
-              focusedId={focusedSubagentId}
-              detailLevel={subagentDetailLevel}
-              onToggle={onSubagentToggle}
-            />
-          </scrollbox>
-        </box>
-      )}
-
       {/* Full-height iteration output */}
       <box
         title={
@@ -759,7 +802,7 @@ function TaskOutputView({
           backgroundColor: colors.bg.secondary,
         }}
       >
-        <scrollbox style={{ flexGrow: 1, padding: 1 }}>
+        <scrollbox style={{ flexGrow: 1, padding: 1 }} stickyScroll={true} stickyStart="bottom">
           {/* Line-based coloring with tool names in green */}
           {displayOutput !== undefined && displayOutput.length > 0 ? (
             <box style={{ flexDirection: 'column' }}>
@@ -807,11 +850,6 @@ function TaskDetails({
   iterationTiming,
   agentName,
   currentModel,
-  subagentDetailLevel,
-  subagentTree,
-  collapsedSubagents,
-  focusedSubagentId,
-  onSubagentToggle,
   promptPreview,
   templateSource,
 }: {
@@ -823,11 +861,6 @@ function TaskDetails({
   iterationTiming?: IterationTimingInfo;
   agentName?: string;
   currentModel?: string;
-  subagentDetailLevel?: SubagentDetailLevel;
-  subagentTree?: SubagentTreeNode[];
-  collapsedSubagents?: Set<string>;
-  focusedSubagentId?: string;
-  onSubagentToggle?: (id: string) => void;
   promptPreview?: string;
   templateSource?: string;
 }): ReactNode {
@@ -841,11 +874,6 @@ function TaskDetails({
         iterationTiming={iterationTiming}
         agentName={agentName}
         currentModel={currentModel}
-        subagentDetailLevel={subagentDetailLevel}
-        subagentTree={subagentTree}
-        collapsedSubagents={collapsedSubagents}
-        focusedSubagentId={focusedSubagentId}
-        onSubagentToggle={onSubagentToggle}
       />
     );
   }
@@ -875,23 +903,20 @@ export function RightPanel({
   iterationTiming,
   agentName,
   currentModel,
-  subagentDetailLevel = 'off',
-  subagentTree,
-  collapsedSubagents,
-  focusedSubagentId,
-  onSubagentToggle,
   promptPreview,
   templateSource,
+  isViewingRemote = false,
+  remoteConnectionStatus,
+  remoteAlias,
 }: RightPanelProps): ReactNode {
-  // Build title with view mode indicator and subagent level
+  // Build title with view mode indicator
   const modeIndicators: Record<typeof viewMode, string> = {
     details: '[Details]',
     output: '[Output]',
     prompt: '[Prompt]',
   };
   const modeIndicator = modeIndicators[viewMode];
-  const subagentIndicator = subagentDetailLevel !== 'off' ? ` [Trace: ${subagentDetailLevel}]` : '';
-  const title = `Details ${modeIndicator}${subagentIndicator}`;
+  const title = `Details ${modeIndicator}`;
 
   return (
     <box
@@ -916,16 +941,15 @@ export function RightPanel({
           iterationTiming={iterationTiming}
           agentName={agentName}
           currentModel={currentModel}
-          subagentDetailLevel={subagentDetailLevel}
-          subagentTree={subagentTree}
-          collapsedSubagents={collapsedSubagents}
-          focusedSubagentId={focusedSubagentId}
-          onSubagentToggle={onSubagentToggle}
           promptPreview={promptPreview}
           templateSource={templateSource}
         />
       ) : (
-        <NoSelection />
+        <NoSelection
+          isViewingRemote={isViewingRemote}
+          remoteConnectionStatus={remoteConnectionStatus}
+          remoteAlias={remoteAlias}
+        />
       )}
     </box>
   );

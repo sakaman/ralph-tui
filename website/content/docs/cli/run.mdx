@@ -171,8 +171,90 @@ Ralph automatically saves state to `.ralph-tui/session.json`:
 
 If interrupted, use [`ralph-tui resume`](/docs/cli/resume) to continue.
 
+## Remote Listener
+
+Enable remote monitoring and control by adding the `--listen` flag. This starts a WebSocket server alongside the execution engine, allowing you to connect from another machine.
+
+### Remote Options
+
+| Option | Description |
+|--------|-------------|
+| `--listen` | Enable remote listener (WebSocket server) |
+| `--listen-port <n>` | Port for remote listener (default: 7890) |
+| `--rotate-token` | Rotate server token before starting |
+
+### First Run: Token Generation
+
+On first use of `--listen`, a secure authentication token is generated:
+
+```
+═══════════════════════════════════════════════════════════════
+                   Server Authentication Token
+═══════════════════════════════════════════════════════════════
+
+  A new server token has been generated:
+
+  OGQwNTcxMjM0NTY3ODkwYWJjZGVmMDEyMzQ1Njc4OQ
+
+  ⚠️  IMPORTANT: This token is shown only once. Save it securely.
+     You will need it to connect remote clients to this instance.
+
+═══════════════════════════════════════════════════════════════
+```
+
+**Save this token securely!** You'll need it to configure remote clients.
+
+### Examples
+
+```bash
+# Start with remote listener on default port (7890)
+ralph-tui run --prd ./prd.json --listen
+
+# Use custom port
+ralph-tui run --epic my-feature --listen --listen-port 8080
+
+# Rotate token and start (invalidates old connections)
+ralph-tui run --prd ./prd.json --listen --rotate-token
+```
+
+### Connecting from Remote
+
+After starting with `--listen`, connect from another machine:
+
+```bash
+# Add remote connection
+ralph-tui remote add prod server.example.com:7890 --token <token>
+
+# View remote in TUI
+ralph-tui run
+# Then press number keys to switch between local and remote tabs
+```
+
+### Security Model
+
+Ralph uses a two-tier token system:
+
+| Token Type | Lifetime | Purpose |
+|------------|----------|---------|
+| **Server Token** | 90 days | Initial authentication, stored on disk |
+| **Connection Token** | 24 hours | Session authentication, auto-refreshed |
+
+**Host binding:**
+- Without `--listen`: binds to `127.0.0.1` (local only)
+- With `--listen`: binds to `0.0.0.0` (network accessible, requires token auth)
+
+### Audit Logging
+
+All remote actions are logged to `~/.config/ralph-tui/audit.log`:
+
+```jsonl
+{"timestamp":"2026-01-19T15:30:00.000Z","clientId":"abc12345@192.168.1.100","action":"connection_connect","success":true}
+{"timestamp":"2026-01-19T15:30:05.000Z","clientId":"abc12345@192.168.1.100","action":"pause","success":true}
+```
+
 ## Related Commands
 
 - **[resume](/docs/cli/resume)** - Continue an interrupted session
 - **[status](/docs/cli/status)** - Check session status
 - **[logs](/docs/cli/logs)** - View iteration output logs
+- **[remote](/docs/cli/remote)** - Manage remote server connections

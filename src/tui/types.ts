@@ -105,6 +105,12 @@ export interface HeaderProps {
   sandboxConfig?: SandboxConfig;
   /** Resolved sandbox mode (when mode is 'auto', this shows what it resolved to) */
   resolvedSandboxMode?: Exclude<SandboxMode, 'auto'>;
+  /** Remote instance info (when viewing a remote) */
+  remoteInfo?: {
+    name: string;
+    host: string;
+    port: number;
+  };
 }
 
 /**
@@ -148,6 +154,11 @@ export interface IterationTimingInfo {
 /**
  * Props for the RightPanel (details) component
  */
+/**
+ * Connection status for remote instances
+ */
+export type ConnectionStatus = 'connected' | 'connecting' | 'disconnected' | 'reconnecting';
+
 export interface RightPanelProps {
   /** Currently selected task (null if none selected) */
   selectedTask: TaskItem | null;
@@ -167,27 +178,16 @@ export interface RightPanelProps {
   agentName?: string;
   /** Model being used (provider/model format) */
   currentModel?: string;
-  /**
-   * Subagent tracing detail level.
-   * Controls how much subagent information is shown:
-   * - 'off': No tracing, use raw output
-   * - 'minimal': Show start/complete events only
-   * - 'moderate': Show events + description + duration (collapsible)
-   * - 'full': Show events + nested output + hierarchy panel
-   */
-  subagentDetailLevel?: SubagentDetailLevel;
-  /** Subagent tree for the current iteration (hierarchical structure) */
-  subagentTree?: SubagentTreeNode[];
-  /** Set of collapsed subagent IDs (for section toggle state) */
-  collapsedSubagents?: Set<string>;
-  /** ID of the currently focused subagent section */
-  focusedSubagentId?: string;
-  /** Callback when a subagent section is toggled */
-  onSubagentToggle?: (id: string) => void;
   /** Rendered prompt content for preview (when viewMode is 'prompt') */
   promptPreview?: string;
   /** Source of the template used for the prompt (e.g., 'tracker:beads', 'builtin:json') */
   templateSource?: string;
+  /** Whether currently viewing a remote instance */
+  isViewingRemote?: boolean;
+  /** Connection status when viewing remote */
+  remoteConnectionStatus?: ConnectionStatus;
+  /** Alias of the remote being viewed */
+  remoteAlias?: string;
 }
 
 /**

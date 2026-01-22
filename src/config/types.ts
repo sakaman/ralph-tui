@@ -255,6 +255,13 @@ export interface StoredConfig {
   /** Shorthand: rate limit handling configuration for the default agent */
   rateLimitHandling?: RateLimitHandlingConfig;
 
+  /**
+   * Shorthand: environment variables to exclude for the default agent.
+   * Use this to prevent sensitive keys from being inherited by agent processes.
+   * Supports exact names (e.g., "ANTHROPIC_API_KEY") or glob patterns (e.g., "*_API_KEY").
+   */
+  envExclude?: string[];
+
   /** Whether to auto-commit after successful tasks */
   autoCommit?: boolean;
 
@@ -317,6 +324,9 @@ export interface RalphConfig {
 
   /** Custom prompt template path (resolved) */
   promptTemplate?: string;
+
+  /** Session ID for log file naming and tracking */
+  sessionId?: string;
 }
 
 /**

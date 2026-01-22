@@ -222,14 +222,60 @@ describe('theme', () => {
 
     test('should return checkmark for done status', () => {
       expect(getTaskStatusIndicator('done')).toBe(statusIndicators.done);
+      expect(getTaskStatusIndicator('done')).toBe('✓');
     });
 
-    test('should return arrow for active status', () => {
+    test('should return play triangle for active status (currently running)', () => {
       expect(getTaskStatusIndicator('active')).toBe(statusIndicators.active);
+      expect(getTaskStatusIndicator('active')).toBe('▶');
     });
 
-    test('should return blocked symbol for blocked status', () => {
+    test('should return circle for actionable status (ready to work on)', () => {
+      expect(getTaskStatusIndicator('actionable')).toBe(statusIndicators.actionable);
+      expect(getTaskStatusIndicator('actionable')).toBe('○');
+    });
+
+    test('should return no-entry symbol for blocked status', () => {
       expect(getTaskStatusIndicator('blocked')).toBe(statusIndicators.blocked);
+      expect(getTaskStatusIndicator('blocked')).toBe('⊘');
+    });
+
+    test('should return X for error status', () => {
+      expect(getTaskStatusIndicator('error')).toBe(statusIndicators.error);
+      expect(getTaskStatusIndicator('error')).toBe('✗');
+    });
+
+    test('should return checkmark for closed status (greyed)', () => {
+      expect(getTaskStatusIndicator('closed')).toBe(statusIndicators.closed);
+      expect(getTaskStatusIndicator('closed')).toBe('✓');
+    });
+  });
+
+  describe('task status colors (Issue 180)', () => {
+    test('active status should be green (same as done)', () => {
+      // Active tasks (currently running) should be green, not blue
+      expect(colors.task.active).toBe('#9ece6a');
+      expect(colors.task.active).toBe(colors.task.done);
+    });
+
+    test('actionable status should be green', () => {
+      // Actionable tasks (ready to work on) should be green
+      expect(colors.task.actionable).toBe('#9ece6a');
+    });
+
+    test('blocked and error status should be red', () => {
+      // Blocked and error tasks should be red
+      expect(colors.task.blocked).toBe('#f7768e');
+      expect(colors.task.error).toBe('#f7768e');
+      expect(colors.task.blocked).toBe(colors.task.error);
+    });
+
+    test('pending status should be grey/muted', () => {
+      expect(colors.task.pending).toBe('#565f89');
+    });
+
+    test('closed status should be dimmed', () => {
+      expect(colors.task.closed).toBe('#414868');
     });
   });
 

@@ -5,7 +5,7 @@
  * Implements graceful interruption with Ctrl+C confirmation dialog.
  */
 
-import { useState } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { createCliRenderer } from '@opentui/core';
 import { createRoot } from '@opentui/react';
 import { buildConfig, validateConfig, loadStoredConfig, saveProjectConfig } from '../config/index.js';
@@ -56,13 +56,81 @@ import { sendCompletionNotification, sendMaxIterationsNotification, sendErrorNot
 import type { NotificationSoundMode } from '../config/types.js';
 import { detectSandboxMode } from '../sandbox/index.js';
 import type { SandboxMode } from '../sandbox/index.js';
+import {
+  createRemoteServer,
+  getOrCreateServerToken,
+  getServerTokenInfo,
+  rotateServerToken,
+  DEFAULT_LISTEN_OPTIONS,
+  InstanceManager,
+  type RemoteServer,
+  type InstanceTab,
+} from '../remote/index.js';
+import type { ConnectionToastMessage } from '../tui/components/Toast.js';
+import { spawnSync } from 'node:child_process';
+import { basename } from 'node:path';
 
 /**
- * Extended runtime options with noSetup and verify flags
+ * Get git repository information for the current working directory.
+ * Returns undefined values if not a git repository or git command fails.
+ */
+function getGitInfo(cwd: string): {
+  repoName?: string;
+  branch?: string;
+  isDirty?: boolean;
+  commitHash?: string;
+} {
+  try {
+    // Get repository root name
+    const repoRoot = spawnSync('git', ['rev-parse', '--show-toplevel'], {
+      cwd,
+      encoding: 'utf-8',
+      timeout: 5000,
+    });
+    const repoName = repoRoot.status === 0 ? basename(repoRoot.stdout.trim()) : undefined;
+
+    // Get current branch
+    const branchResult = spawnSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
+      cwd,
+      encoding: 'utf-8',
+      timeout: 5000,
+    });
+    const branch = branchResult.status === 0 ? branchResult.stdout.trim() : undefined;
+
+    // Check for uncommitted changes
+    const statusResult = spawnSync('git', ['status', '--porcelain'], {
+      cwd,
+      encoding: 'utf-8',
+      timeout: 5000,
+    });
+    const isDirty = statusResult.status === 0 ? statusResult.stdout.trim().length > 0 : undefined;
+
+    // Get short commit hash
+    const hashResult = spawnSync('git', ['rev-parse', '--short', 'HEAD'], {
+      cwd,
+      encoding: 'utf-8',
+      timeout: 5000,
+    });
+    const commitHash = hashResult.status === 0 ? hashResult.stdout.trim() : undefined;
+
+    return { repoName, branch, isDirty, commitHash };
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Extended runtime options with noSetup, verify, and listen flags
  */
 interface ExtendedRuntimeOptions extends RuntimeOptions {
   noSetup?: boolean;
   verify?: boolean;
+  /** Enable remote listener (implies headless) */
+  listen?: boolean;
+  /** Port for remote listener (default: 7890) */
+  listenPort?: number;
+  /** Rotate server token before starting listener */
+  rotateToken?: boolean;
 }
 
 /**
@@ -231,6 +299,25 @@ export function parseRunArgs(args: string[]): ExtendedRuntimeOptions {
       case '--verify':
         options.verify = true;
         break;
+
+      case '--listen':
+        options.listen = true;
+        options.headless = true; // Listen mode implies headless
+        break;
+
+      case '--listen-port':
+        if (nextArg && !nextArg.startsWith('-')) {
+          const parsed = parseInt(nextArg, 10);
+          if (!isNaN(parsed) && parsed > 0 && parsed < 65536) {
+            options.listenPort = parsed;
+          }
+          i++;
+        }
+        break;
+
+      case '--rotate-token':
+        options.rotateToken = true;
+        break;
     }
   }
 
@@ -272,6 +359,9 @@ Options:
   --sandbox=sandbox-exec  Force sandbox-exec (macOS)
   --no-sandbox        Disable sandboxing
   --no-network        Disable network access in sandbox
+  --listen            Enable remote listener (implies --headless)
+  --listen-port <n>   Port for remote listener (default: 7890)
+  --rotate-token      Rotate server token before starting listener
 
 Log Output Format (--no-tui mode):
   [timestamp] [level] [component] message
@@ -294,6 +384,7 @@ Examples:
   ralph-tui run --iterations 20              # Limit to 20 iterations
   ralph-tui run --resume                     # Resume previous session
   ralph-tui run --no-tui                     # Run headless for CI/scripts
+  ralph-tui run --listen --prd ./prd.json    # Run with remote listener enabled
 `);
 }
 
@@ -606,6 +697,8 @@ interface RunAppWrapperProps {
   sandboxConfig?: SandboxConfig;
   /** Resolved sandbox mode (when mode is 'auto', this shows what it resolved to) */
   resolvedSandboxMode?: Exclude<SandboxMode, 'auto'>;
+  /** Whether to show the epic loader immediately on startup (for json tracker without PRD path) */
+  initialShowEpicLoader?: boolean;
 }
 
 /**
@@ -629,11 +722,48 @@ function RunAppWrapper({
   currentModel,
   sandboxConfig,
   resolvedSandboxMode,
+  initialShowEpicLoader = false,
 }: RunAppWrapperProps) {
   const [showInterruptDialog, setShowInterruptDialog] = useState(false);
   const [storedConfig, setStoredConfig] = useState<StoredConfig | undefined>(initialStoredConfig);
   const [tasks, setTasks] = useState<TrackerTask[]>(initialTasks ?? []);
   const [currentEpicId, setCurrentEpicId] = useState<string | undefined>(initialEpicId);
+
+  // Local git info (computed once on mount, static for the session)
+  const localGitInfo = useMemo(() => getGitInfo(cwd), [cwd]);
+
+  // Remote instance management
+  const [instanceManager] = useState(() => new InstanceManager());
+  const [instanceTabs, setInstanceTabs] = useState<InstanceTab[]>([]);
+  const [selectedTabIndex, setSelectedTabIndex] = useState(0);
+  const [connectionToast, setConnectionToast] = useState<ConnectionToastMessage | null>(null);
+
+  // Initialize instance manager on mount
+  useEffect(() => {
+    instanceManager.onStateChange((tabs, selectedIndex) => {
+      setInstanceTabs(tabs);
+      setSelectedTabIndex(selectedIndex);
+    });
+    instanceManager.onToast((toast) => {
+      setConnectionToast(toast as ConnectionToastMessage);
+      // Auto-clear toast after 3 seconds
+      setTimeout(() => setConnectionToast(null), 3000);
+    });
+    instanceManager.initialize().then(() => {
+      setInstanceTabs(instanceManager.getTabs());
+      setSelectedTabIndex(instanceManager.getSelectedIndex());
+    });
+
+    // Cleanup on unmount
+    return () => {
+      instanceManager.disconnectAll();
+    };
+  }, []);
+
+  // Handle tab selection
+  const handleSelectTab = async (index: number): Promise<void> => {
+    await instanceManager.selectTab(index);
+  };
 
   // Get available plugins from registries
   const agentRegistry = getAgentRegistry();
@@ -758,6 +888,13 @@ function RunAppWrapper({
       currentModel={currentModel}
       sandboxConfig={sandboxConfig}
       resolvedSandboxMode={resolvedSandboxMode}
+      instanceTabs={instanceTabs}
+      selectedTabIndex={selectedTabIndex}
+      onSelectTab={handleSelectTab}
+      connectionToast={connectionToast}
+      instanceManager={instanceManager}
+      initialShowEpicLoader={initialShowEpicLoader}
+      localGitInfo={localGitInfo}
     />
   );
 }
@@ -988,6 +1125,7 @@ async function runWithTui(
       currentModel={config.model}
       sandboxConfig={config.sandbox}
       resolvedSandboxMode={resolvedSandboxMode}
+      initialShowEpicLoader={config.tracker.plugin === 'json' && !config.prdPath}
     />
   );
 
@@ -1033,12 +1171,23 @@ async function runWithTui(
  * Log output format: [timestamp] [level] [component] message
  * This is designed for CI/scripts that need machine-parseable output.
  */
+interface HeadlessOptions {
+  notificationOptions?: NotificationRunOptions;
+  /** If true, keep process alive after engine completes (for remote listener) */
+  listenMode?: boolean;
+  /** Remote server instance to stop on shutdown */
+  remoteServer?: RemoteServer | null;
+}
+
 async function runHeadless(
   engine: ExecutionEngine,
   persistedState: PersistedSessionState,
   config: RalphConfig,
-  notificationOptions?: NotificationRunOptions
+  headlessOptions?: HeadlessOptions
 ): Promise<PersistedSessionState> {
+  const notificationOptions = headlessOptions?.notificationOptions;
+  const listenMode = headlessOptions?.listenMode ?? false;
+  const remoteServer = headlessOptions?.remoteServer;
   let currentState = persistedState;
   let lastSigintTime = 0;
   const DOUBLE_PRESS_WINDOW_MS = 1000;
@@ -1229,6 +1378,12 @@ async function runHeadless(
     // Save interrupted state
     currentState = { ...currentState, status: 'interrupted' };
     await savePersistedSession(currentState);
+
+    // Stop remote server if running
+    if (remoteServer) {
+      await remoteServer.stop();
+    }
+
     await engine.dispose();
     process.exit(0);
   };
@@ -1265,6 +1420,12 @@ async function runHeadless(
 
     currentState = { ...currentState, status: 'interrupted' };
     await savePersistedSession(currentState);
+
+    // Stop remote server if running
+    if (remoteServer) {
+      await remoteServer.stop();
+    }
+
     await engine.dispose();
     process.exit(0);
   };
@@ -1281,6 +1442,18 @@ async function runHeadless(
 
   // Start the engine
   await engine.start();
+
+  // In listen mode, keep process alive for remote connections
+  if (listenMode) {
+    logger.info('system', 'Engine idle. Waiting for remote commands (Ctrl+C to stop)...');
+
+    // Keep process alive until signal received
+    await new Promise<void>((_resolve) => {
+      // The existing SIGINT/SIGTERM handlers will call process.exit()
+      // This promise just keeps the event loop alive indefinitely
+    });
+  }
+
   await engine.dispose();
 
   return currentState;
@@ -1511,6 +1684,9 @@ export async function executeRunCommand(args: string[]): Promise<void> {
     });
   }
 
+  // Set session ID on config for use in iteration log filenames
+  config.sessionId = session.id;
+
   console.log(`Session: ${session.id}`);
   console.log(`Agent: ${config.agent.plugin}`);
   console.log(`Tracker: ${config.tracker.plugin}`);
@@ -1550,6 +1726,107 @@ export async function executeRunCommand(args: string[]): Promise<void> {
     process.exit(1);
   }
 
+  // Warn if --rotate-token is used without --listen
+  if (options.rotateToken && !options.listen) {
+    console.warn('Warning: --rotate-token has no effect without --listen');
+  }
+
+  // Start remote listener if --listen flag is set
+  let remoteServer: RemoteServer | null = null;
+  if (options.listen) {
+    try {
+      const listenPort = options.listenPort ?? DEFAULT_LISTEN_OPTIONS.port;
+
+      // Handle token rotation if requested
+      let token;
+      let isNew = false;
+      if (options.rotateToken) {
+        token = await rotateServerToken();
+        isNew = true; // Treat rotated token as new (show it once)
+        console.log('');
+        console.log('Token rotated successfully.');
+      } else {
+        const result = await getOrCreateServerToken();
+        token = result.token;
+        isNew = result.isNew;
+      }
+
+      // Get git info for remote display
+      const gitInfo = getGitInfo(cwd);
+
+      // Resolve sandbox mode for remote display
+      const resolvedSandboxModeForRemote = config.sandbox?.enabled
+        ? (config.sandbox.mode === 'auto' ? await detectSandboxMode() : config.sandbox.mode)
+        : undefined;
+
+      // Create and start the remote server
+      remoteServer = await createRemoteServer({
+        port: listenPort,
+        engine,
+        tracker,
+        agentName: config.agent.plugin,
+        trackerName: config.tracker.plugin,
+        currentModel: config.model,
+        autoCommit: storedConfig?.autoCommit,
+        sandboxConfig: config.sandbox?.enabled ? {
+          enabled: true,
+          mode: config.sandbox.mode,
+          network: config.sandbox.network,
+        } : undefined,
+        resolvedSandboxMode: resolvedSandboxModeForRemote,
+        gitInfo,
+        cwd,
+      });
+      const serverState = await remoteServer.start();
+      const actualPort = serverState.port;
+
+      // Display connection info
+      console.log('');
+      console.log('═══════════════════════════════════════════════════════════════');
+      console.log('                    Remote Listener Enabled                     ');
+      console.log('═══════════════════════════════════════════════════════════════');
+      console.log('');
+      if (actualPort !== listenPort) {
+        console.log(`  Port: ${actualPort} (requested ${listenPort} was in use)`);
+      } else {
+        console.log(`  Port: ${actualPort}`);
+      }
+      if (isNew) {
+        // First time or rotated - show full token
+        console.log('');
+        console.log('  New server token generated:');
+        console.log(`  ${token.value}`);
+        console.log('');
+        console.log('  ⚠️  Save this token securely - it won\'t be shown again!');
+      } else {
+        // Subsequent runs - show preview only (security: avoid showing in logs/screen shares)
+        const tokenPreview = token.value.substring(0, 8) + '...';
+        console.log(`  Token: ${tokenPreview}`);
+        const tokenInfo = await getServerTokenInfo();
+        if (tokenInfo.daysRemaining !== undefined && tokenInfo.daysRemaining <= 7) {
+          console.log(`  ⚠️  Token expires in ${tokenInfo.daysRemaining} day${tokenInfo.daysRemaining !== 1 ? 's' : ''}!`);
+        }
+        console.log('');
+        console.log('  Hint: Use --rotate-token to generate a new token and see the full value.');
+      }
+      console.log('');
+      console.log('  Connect from another machine:');
+      console.log(`    ralph-tui remote add <alias> <this-host>:${actualPort} --token <token>`);
+      console.log('');
+      console.log('═══════════════════════════════════════════════════════════════');
+      console.log('');
+    } catch (error) {
+      console.error(
+        'Failed to start remote listener:',
+        error instanceof Error ? error.message : error
+      );
+      await endSession(config.cwd, 'failed');
+      await releaseLockNew(config.cwd);
+      cleanupLockHandlers();
+      process.exit(1);
+    }
+  }
+
   // Create persisted session state
   let persistedState = createPersistedSession({
     sessionId: session.id,
@@ -1585,7 +1862,11 @@ export async function executeRunCommand(args: string[]): Promise<void> {
       persistedState = await runWithTui(engine, persistedState, config, tasks, storedConfig, notificationRunOptions);
     } else {
       // Headless mode still auto-starts (for CI/automation)
-      persistedState = await runHeadless(engine, persistedState, config, notificationRunOptions);
+      persistedState = await runHeadless(engine, persistedState, config, {
+        notificationOptions: notificationRunOptions,
+        listenMode: options.listen,
+        remoteServer,
+      });
     }
   } catch (error) {
     console.error(
@@ -1617,6 +1898,11 @@ export async function executeRunCommand(args: string[]): Promise<void> {
     // Save current state (session remains resumable)
     await savePersistedSession(persistedState);
     console.log('\nSession state saved. Use "ralph-tui resume" to continue.');
+  }
+
+  // Stop remote server if running
+  if (remoteServer) {
+    await remoteServer.stop();
   }
 
   // End session and clean up lock

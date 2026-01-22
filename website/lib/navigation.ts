@@ -42,6 +42,9 @@ export const docsNavigation: NavItem[] = [
       { title: 'setup', href: '/docs/cli/setup' },
       { title: 'create-prd', href: '/docs/cli/create-prd' },
       { title: 'convert', href: '/docs/cli/convert' },
+      { title: 'remote', href: '/docs/cli/remote' },
+      { title: 'doctor', href: '/docs/cli/doctor' },
+      { title: 'info', href: '/docs/cli/info' },
     ],
   },
   {
@@ -63,6 +66,9 @@ export const docsNavigation: NavItem[] = [
           { title: 'Claude', href: '/docs/plugins/agents/claude' },
           { title: 'OpenCode', href: '/docs/plugins/agents/opencode' },
           { title: 'Factory Droid', href: '/docs/plugins/agents/droid' },
+          { title: 'Codex', href: '/docs/plugins/agents/codex', label: 'New' },
+          { title: 'Gemini', href: '/docs/plugins/agents/gemini', label: 'New' },
+          { title: 'Kiro', href: '/docs/plugins/agents/kiro', label: 'New' },
         ],
       },
       {
@@ -70,6 +76,7 @@ export const docsNavigation: NavItem[] = [
         items: [
           { title: 'JSON', href: '/docs/plugins/trackers/json' },
           { title: 'Beads', href: '/docs/plugins/trackers/beads' },
+          { title: 'Beads-Rust', href: '/docs/plugins/trackers/beads-rust', label: 'New' },
           { title: 'Beads-BV', href: '/docs/plugins/trackers/beads-bv' },
         ],
       },

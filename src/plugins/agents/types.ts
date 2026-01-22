@@ -139,6 +139,13 @@ export interface AgentExecuteOptions {
 
   /** Enable subagent tracing for structured output (JSONL format for Claude) */
   subagentTracing?: boolean;
+
+  /**
+   * Callback for raw JSONL messages parsed by the agent.
+   * Used by the engine to track subagent activity without re-parsing output.
+   * The message object is the raw parsed JSON from the agent's JSONL output.
+   */
+  onJsonlMessage?: (message: Record<string, unknown>) => void;
 }
 
 /**
@@ -227,6 +234,16 @@ export interface AgentPluginConfig {
 
   /** Rate limit handling configuration for this agent */
   rateLimitHandling?: RateLimitHandlingConfig;
+
+  /**
+   * Environment variables to exclude when spawning the agent process.
+   * Use this to prevent sensitive keys from being inherited by the agent.
+   * Supports exact names (e.g., "ANTHROPIC_API_KEY") or glob patterns (e.g., "*_API_KEY").
+   *
+   * @example ["ANTHROPIC_API_KEY"] - Exclude specific key
+   * @example ["*_API_KEY", "*_SECRET"] - Exclude all API keys and secrets
+   */
+  envExclude?: string[];
 }
 
 export interface AgentSandboxRequirements {
@@ -234,6 +251,26 @@ export interface AgentSandboxRequirements {
   binaryPaths: string[];
   runtimePaths: string[];
   requiresNetwork: boolean;
+}
+
+/**
+ * Paths where an agent stores skills/plugins.
+ * Each agent has its own conventions for where skills are installed.
+ */
+export interface AgentSkillsPaths {
+  /**
+   * Personal/global skills directory (e.g., ~/.claude/skills/).
+   * Skills installed here are available across all projects.
+   * Path may use ~ for home directory.
+   */
+  personal: string;
+
+  /**
+   * Repository-local skills directory (e.g., .claude/skills/).
+   * Relative path from project root.
+   * Skills installed here are only available in the specific project.
+   */
+  repo: string;
 }
 
 /**
@@ -272,6 +309,12 @@ export interface AgentPluginMeta {
 
   /** Format of structured output when supportsSubagentTracing is true */
   structuredOutputFormat?: 'json' | 'jsonl';
+
+  /**
+   * Paths where this agent stores skills.
+   * If undefined, the agent does not support skill installation.
+   */
+  skillsPaths?: AgentSkillsPaths;
 }
 
 /**

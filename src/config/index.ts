@@ -208,6 +208,7 @@ function mergeConfigs(
   // Replace arrays entirely if present in project config
   if (project.fallbackAgents !== undefined)
     merged.fallbackAgents = project.fallbackAgents;
+  if (project.envExclude !== undefined) merged.envExclude = project.envExclude;
 
   // Merge nested objects
   if (project.rateLimitHandling !== undefined) {
@@ -360,6 +361,14 @@ function getDefaultAgentConfig(
       result = {
         ...result,
         command: storedConfig.command,
+      };
+    }
+
+    // Apply envExclude shorthand (only if not already set on agent config)
+    if (storedConfig.envExclude && !result.envExclude) {
+      result = {
+        ...result,
+        envExclude: storedConfig.envExclude,
       };
     }
 
@@ -662,7 +671,10 @@ export async function validateConfig(
 
   if (config.tracker.plugin === "json") {
     if (!config.prdPath) {
-      errors.push("PRD path required for json tracker");
+      // No error - TUI will show file prompt dialog to let user select a file
+      warnings.push(
+        "No PRD path specified for json tracker; TUI will prompt for file selection",
+      );
     } else {
       // Validate PRD file exists and is valid JSON
       const prdFilePath = resolve(config.cwd, config.prdPath);
