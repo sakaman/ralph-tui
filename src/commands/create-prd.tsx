@@ -87,6 +87,29 @@ export function parseCreatePrdArgs(args: string[]): CreatePrdArgs {
 }
 
 /**
+ * Parse tracker labels from config trackerOptions.
+ * Handles both string (comma-separated) and array formats.
+ * @internal Exported for testing
+ */
+export function parseTrackerLabels(
+  trackerOptions?: Record<string, unknown>
+): string[] | undefined {
+  const configLabels = trackerOptions?.labels;
+  if (typeof configLabels === 'string') {
+    const parsed = configLabels.split(',').map((l) => l.trim()).filter(Boolean);
+    return parsed.length > 0 ? parsed : undefined;
+  }
+  if (Array.isArray(configLabels)) {
+    const parsed = (configLabels as unknown[])
+      .filter((l): l is string => typeof l === 'string')
+      .map((l) => l.trim())
+      .filter(Boolean);
+    return parsed.length > 0 ? parsed : undefined;
+  }
+  return undefined;
+}
+
+/**
  * Print help for the create-prd command.
  */
 export function printCreatePrdHelp(): void {
@@ -412,16 +435,7 @@ export async function executeCreatePrdCommand(args: string[]): Promise<void> {
 
   const storedConfig = await loadStoredConfig(cwd);
 
-  // Load tracker labels from config (trackerOptions.labels)
-  const configLabels = storedConfig.trackerOptions?.labels;
-  if (typeof configLabels === 'string') {
-    parsedArgs.trackerLabels = configLabels.split(',').map((l) => l.trim()).filter(Boolean);
-  } else if (Array.isArray(configLabels)) {
-    parsedArgs.trackerLabels = (configLabels as unknown[])
-      .filter((l): l is string => typeof l === 'string')
-      .map((l) => l.trim())
-      .filter(Boolean);
-  }
+  parsedArgs.trackerLabels = parseTrackerLabels(storedConfig.trackerOptions);
 
   if (parsedArgs.prdSkill) {
     if (!storedConfig.skills_dir?.trim()) {

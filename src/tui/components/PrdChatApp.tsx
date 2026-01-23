@@ -184,6 +184,33 @@ Transform any complex PRD structure (phases, milestones, etc.) into a FLAT list 
 }
 
 /**
+ * Build the labels instruction appended to the beads skill prompt.
+ * Deduplicates labels case-insensitively and always includes 'ralph'.
+ * Returns an empty string when no labels are configured.
+ * @internal Exported for testing
+ */
+export function buildBeadsLabelsInstruction(trackerLabels?: string[]): string {
+  if (!trackerLabels || trackerLabels.length === 0) return '';
+
+  const seen = new Set<string>(['ralph']);
+  const allLabels = ['ralph'];
+  for (const l of trackerLabels) {
+    const key = l.toLowerCase();
+    if (!seen.has(key)) {
+      seen.add(key);
+      allLabels.push(l);
+    }
+  }
+  const labelsStr = allLabels.join(',');
+  return `
+
+IMPORTANT: Apply these labels to EVERY issue created (epic and all child tasks):
+  --labels "${labelsStr}"
+
+Add the --labels flag to every bd create / br create command.`;
+}
+
+/**
  * PRD Preview component for the right panel
  */
 function PrdPreview({ content, path }: { content: string; path: string }): ReactNode {
@@ -407,25 +434,8 @@ Press a number key to select, or continue chatting.`,
       setMessages((prev) => [...prev, userMsg]);
 
       // Build labels instruction for beads format
-      let labelsInstruction = '';
-      if (format === 'beads' && trackerLabels && trackerLabels.length > 0) {
-        const seen = new Set<string>(['ralph']);
-        const allLabels = ['ralph'];
-        for (const l of trackerLabels) {
-          const key = l.toLowerCase();
-          if (!seen.has(key)) {
-            seen.add(key);
-            allLabels.push(l);
-          }
-        }
-        const labelsStr = allLabels.join(',');
-        labelsInstruction = `
-
-IMPORTANT: Apply these labels to EVERY issue created (epic and all child tasks):
-  --labels "${labelsStr}"
-
-Add the --labels flag to every bd create / br create command.`;
-      }
+      const labelsInstruction =
+        format === 'beads' ? buildBeadsLabelsInstruction(trackerLabels) : '';
 
       const prompt = `${option.skillPrompt}
 
