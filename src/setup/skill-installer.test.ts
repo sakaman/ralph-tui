@@ -4,7 +4,7 @@
  * skill listing, installation, and related functionality.
  *
  * IMPORTANT: This file imports the real skill-installer module at file level using
- * the ?reload query parameter to bypass any mocks from other test files.
+ * the ?test-reload query parameter to bypass any mocks from other test files.
  * Bun's module mocking is global, so we need to ensure we get a fresh module instance.
  */
 
