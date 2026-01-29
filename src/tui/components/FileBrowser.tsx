@@ -10,7 +10,7 @@ import type { ScrollBoxRenderable } from '@opentui/core';
 import { homedir } from 'node:os';
 import { dirname, resolve, sep } from 'node:path';
 import { colors } from '../theme.js';
-import { listDirectory, isDirectory, type DirectoryEntry } from '../../utils/files.js';
+import { listDirectory, isDirectory, pathExists, type DirectoryEntry } from '../../utils/files.js';
 
 /**
  * Props for the FileBrowser component
@@ -167,13 +167,22 @@ export function FileBrowser({
   // Navigate to a typed path
   const navigateToPath = useCallback(async (path: string) => {
     const expanded = expandPath(path);
-    const isDir = await isDirectory(expanded);
-    if (isDir) {
+    try {
+      const exists = await pathExists(expanded);
+      if (!exists) {
+        setError(`Path does not exist: ${path}`);
+        return;
+      }
+      const isDir = await isDirectory(expanded);
+      if (!isDir) {
+        setError(`Not a directory: ${path}`);
+        return;
+      }
       setCurrentPath(expanded);
       setEditingPath(false);
       setEditedPath('');
-    } else {
-      setError(`Not a directory: ${path}`);
+    } catch (err) {
+      setError(`Cannot access path: ${path}`);
     }
   }, [expandPath]);
 
