@@ -6,18 +6,17 @@ This guide describes a **repeatable, idempotent** method for manually testing Ra
 
 ```bash
 # One-time setup (creates workspace in ~/.cache/ralph-tui/test-workspace)
-cd testing
+cd /path/to/ralph-tui/testing
 ./setup-test-workspace.sh
 
-# Run the test
-cd ~/.cache/ralph-tui/test-workspace
-ralph-tui run --prd /path/to/ralph-tui/testing/test-prd.json
+# Run the test (use --cwd to specify workspace)
+ralph-tui run --prd testing/test-prd.json --cwd ~/.cache/ralph-tui/test-workspace
 
 # If something goes wrong, stop and reset
-/path/to/ralph-tui/testing/reset-test.sh
+./reset-test.sh
 
 # Run again
-ralph-tui run --prd /path/to/ralph-tui/testing/test-prd.json
+ralph-tui run --prd testing/test-prd.json --cwd ~/.cache/ralph-tui/test-workspace
 ```
 
 ## Architecture
@@ -99,16 +98,17 @@ This creates:
 ### 2. Running a Test
 
 ```bash
-# Navigate to the test workspace
-cd ~/.cache/ralph-tui/test-workspace
+# Option A: Using installed ralph-tui (from ralph-tui directory)
+ralph-tui run --prd testing/test-prd.json --cwd ~/.cache/ralph-tui/test-workspace
 
-# Option A: Using installed ralph-tui
-ralph-tui run --prd /path/to/ralph-tui/testing/test-prd.json
-
-# Option B: Using development build
-cd /path/to/ralph-tui
-bun run dev -- run --prd testing/test-prd.json
+# Option B: Using development build (from ralph-tui directory)
+bun run dev -- run --prd testing/test-prd.json --cwd ~/.cache/ralph-tui/test-workspace
 ```
+
+The `--cwd` flag tells ralph-tui to execute in the test workspace, where:
+- The agent will create output files
+- Session state (`.ralph-tui/`) will be stored
+- Git operations will occur
 
 ### 3. Observing the Workflow
 
@@ -220,16 +220,15 @@ For automated testing in CI, you can run:
 # Setup (uses default location)
 ./testing/setup-test-workspace.sh
 
-# Run headless with max iterations
-cd ~/.cache/ralph-tui/test-workspace
-ralph-tui run --prd /path/to/ralph-tui/testing/test-prd.json --headless --iterations 10
+# Run headless with max iterations (from ralph-tui directory)
+ralph-tui run --prd testing/test-prd.json --cwd ~/.cache/ralph-tui/test-workspace --headless --iterations 10
 
 # Verify completion
-jq '.userStories | all(.passes)' /path/to/ralph-tui/testing/test-prd.json
+jq '.userStories | all(.passes)' testing/test-prd.json
 # Should output: true
 
 # Verify output files exist
-test -f summary.txt && echo "PASS" || echo "FAIL"
+test -f ~/.cache/ralph-tui/test-workspace/summary.txt && echo "PASS" || echo "FAIL"
 ```
 
 ## Contributing

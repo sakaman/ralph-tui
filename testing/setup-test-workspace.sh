@@ -76,12 +76,12 @@ This workspace is used to test:
 ## Running Tests
 
 \`\`\`bash
-# Run ralph-tui with the test PRD
-ralph-tui run --prd $SCRIPT_DIR/test-prd.json
-
-# Or from ralph-tui source directory
+# From ralph-tui directory, run with --cwd pointing here
 cd $(dirname "$SCRIPT_DIR")
-bun run dev -- run --prd testing/test-prd.json
+ralph-tui run --prd testing/test-prd.json --cwd $TEST_WORKSPACE
+
+# Or with development build
+bun run dev -- run --prd testing/test-prd.json --cwd $TEST_WORKSPACE
 \`\`\`
 
 ## Reset
@@ -126,14 +126,18 @@ echo "$TEST_WORKSPACE" > "$SCRIPT_DIR/.test-workspace-path"
 echo -e "${GREEN}  Saved to $SCRIPT_DIR/.test-workspace-path${NC}"
 
 # Final summary
+RALPH_DIR="$(dirname "$SCRIPT_DIR")"
 echo ""
 echo -e "${GREEN}=== Setup Complete ===${NC}"
 echo ""
 echo -e "Test workspace created at: ${BLUE}$TEST_WORKSPACE${NC}"
 echo ""
-echo -e "To run the test:"
-echo -e "  ${BLUE}cd $TEST_WORKSPACE${NC}"
-echo -e "  ${BLUE}ralph-tui run --prd $SCRIPT_DIR/test-prd.json${NC}"
+echo -e "To run the test (from ralph-tui directory):"
+echo -e "  ${BLUE}cd $RALPH_DIR${NC}"
+echo -e "  ${BLUE}ralph-tui run --prd testing/test-prd.json --cwd $TEST_WORKSPACE${NC}"
+echo ""
+echo -e "Or with development build:"
+echo -e "  ${BLUE}bun run dev -- run --prd testing/test-prd.json --cwd $TEST_WORKSPACE${NC}"
 echo ""
 echo -e "To reset everything:"
 echo -e "  ${BLUE}$SCRIPT_DIR/reset-test.sh${NC}"
