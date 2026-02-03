@@ -58,6 +58,20 @@ export const docsNavigation: NavItem[] = [
     ],
   },
   {
+    title: 'Parallel Execution',
+    label: 'New',
+    items: [
+      { title: 'Overview', href: '/docs/parallel/overview' },
+      { title: 'How It Works', href: '/docs/parallel/how-it-works' },
+      { title: 'Task Dependencies', href: '/docs/parallel/task-dependencies' },
+      { title: 'Git Worktrees', href: '/docs/parallel/git-worktrees' },
+      { title: 'Merge & Conflicts', href: '/docs/parallel/merge-and-conflicts' },
+      { title: 'TUI Guide', href: '/docs/parallel/tui-guide' },
+      { title: 'Configuration', href: '/docs/parallel/configuration' },
+      { title: 'Troubleshooting', href: '/docs/parallel/troubleshooting' },
+    ],
+  },
+  {
     title: 'Plugins',
     items: [
       { title: 'Overview', href: '/docs/plugins/overview' },
@@ -68,6 +82,7 @@ export const docsNavigation: NavItem[] = [
           { title: 'OpenCode', href: '/docs/plugins/agents/opencode' },
           { title: 'Factory Droid', href: '/docs/plugins/agents/droid' },
           { title: 'Codex', href: '/docs/plugins/agents/codex', label: 'New' },
+          { title: 'Cursor', href: '/docs/plugins/agents/cursor', label: 'New' },
           { title: 'Gemini', href: '/docs/plugins/agents/gemini', label: 'New' },
           { title: 'Kiro', href: '/docs/plugins/agents/kiro', label: 'New' },
         ],

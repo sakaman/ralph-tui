@@ -1,9 +1,13 @@
 /**
  * ABOUTME: Tests for BeadsRustTrackerPlugin br CLI integration.
  * Verifies detection, task listing, and single-task retrieval via JSON output.
+ *
+ * IMPORTANT: The mock is set up in beforeAll (not at module level) to prevent
+ * polluting other test files. The module under test is dynamically imported
+ * after the mock is applied.
  */
 
-import { describe, test, expect, mock, beforeEach } from 'bun:test';
+import { describe, test, expect, mock, beforeEach, beforeAll, afterAll } from 'bun:test';
 import { EventEmitter } from 'node:events';
 
 let mockAccessShouldFail = false;
@@ -41,47 +45,59 @@ function createMockChildProcess(response?: MockSpawnResponse) {
   return proc;
 }
 
-mock.module('node:child_process', () => ({
-  spawn: (cmd: string, args: string[]) => {
-    mockSpawnArgs.push({ cmd, args });
-    const response = mockSpawnResponses.shift();
-    return createMockChildProcess(response);
-  },
-}));
-
-mock.module('node:fs', () => ({
-  constants: {
-    R_OK: 4,
-  },
-  readFileSync: (path: string) => {
-    if (path.endsWith('template.hbs')) {
-      return 'br close {{taskId}}\nbr sync --flush-only\n';
-    }
-    return '';
-  },
-}));
-
-mock.module('node:fs/promises', () => ({
-  access: async () => {
-    if (mockAccessShouldFail) {
-      throw new Error('ENOENT');
-    }
-  },
-  readFile: async (path: string) => {
-    mockReadFilePaths.push(path);
-    if (mockReadFileShouldFail) {
-      throw new Error('ENOENT');
-    }
-    return mockReadFileContent;
-  },
-  constants: {
-    R_OK: 4,
-  },
-}));
-
-const { BeadsRustTrackerPlugin } = await import('./index.js');
+// Declare the class type for the import
+let BeadsRustTrackerPlugin: typeof import('./index.js').BeadsRustTrackerPlugin;
 
 describe('BeadsRustTrackerPlugin', () => {
+  beforeAll(async () => {
+    // Apply mocks BEFORE importing the module under test
+    mock.module('node:child_process', () => ({
+      spawn: (cmd: string, args: string[]) => {
+        mockSpawnArgs.push({ cmd, args });
+        const response = mockSpawnResponses.shift();
+        return createMockChildProcess(response);
+      },
+    }));
+
+    mock.module('node:fs', () => ({
+      constants: {
+        R_OK: 4,
+      },
+      readFileSync: (path: string) => {
+        if (path.endsWith('template.hbs')) {
+          return 'br close {{taskId}}\nbr sync --flush-only\n';
+        }
+        return '';
+      },
+    }));
+
+    mock.module('node:fs/promises', () => ({
+      access: async () => {
+        if (mockAccessShouldFail) {
+          throw new Error('ENOENT');
+        }
+      },
+      readFile: async (path: string) => {
+        mockReadFilePaths.push(path);
+        if (mockReadFileShouldFail) {
+          throw new Error('ENOENT');
+        }
+        return mockReadFileContent;
+      },
+      constants: {
+        R_OK: 4,
+      },
+    }));
+
+    // Import the module so it uses the mocked versions
+    const module = await import('./index.js');
+    BeadsRustTrackerPlugin = module.BeadsRustTrackerPlugin;
+  });
+
+  afterAll(() => {
+    mock.restore();
+  });
+
   beforeEach(() => {
     mockAccessShouldFail = false;
     mockSpawnArgs = [];
@@ -137,7 +153,10 @@ describe('BeadsRustTrackerPlugin', () => {
   });
 
   describe('getTasks', () => {
-    test('executes br list --json --all', async () => {
+    test('executes br list --json --all with --limit 0 to bypass default limit', async () => {
+      // The --limit 0 flag is critical to bypass br's default limit of 50 results.
+      // Without it, epics with more than 50 tasks would have tasks truncated.
+      // See: https://github.com/subsy/ralph-tui/issues/233
       mockSpawnResponses = [
         { exitCode: 0, stdout: 'br version 0.4.1\n' },
         {
@@ -156,7 +175,7 @@ describe('BeadsRustTrackerPlugin', () => {
 
       expect(mockSpawnArgs.length).toBe(1);
       expect(mockSpawnArgs[0]?.cmd).toBe('br');
-      expect(mockSpawnArgs[0]?.args).toEqual(['list', '--json', '--all']);
+      expect(mockSpawnArgs[0]?.args).toEqual(['list', '--json', '--all', '--limit', '0']);
     });
 
     test('supports --parent filtering via in-memory filtering', async () => {
@@ -186,7 +205,7 @@ describe('BeadsRustTrackerPlugin', () => {
       const tasks = await plugin.getTasks({ parentId: 'epic' });
 
       // Should call list first, then dep list to get children
-      expect(mockSpawnArgs[0]?.args).toEqual(['list', '--json', '--all']);
+      expect(mockSpawnArgs[0]?.args).toEqual(['list', '--json', '--all', '--limit', '0']);
       expect(mockSpawnArgs[1]?.args).toEqual(['dep', 'list', 'epic', '--direction', 'up', '--json']);
 
       // Should only return child tasks
@@ -333,6 +352,8 @@ describe('BeadsRustTrackerPlugin', () => {
         'list',
         '--json',
         '--all',
+        '--limit',
+        '0',
         '--label',
         'a,b',
       ]);
@@ -359,6 +380,8 @@ describe('BeadsRustTrackerPlugin', () => {
         'list',
         '--json',
         '--all',
+        '--limit',
+        '0',
         '--status',
         'closed',
       ]);
@@ -369,7 +392,7 @@ describe('BeadsRustTrackerPlugin', () => {
   });
 
   describe('getEpics', () => {
-    test('executes br list --json --type epic', async () => {
+    test('executes br list --json --type epic with --limit 0', async () => {
       mockSpawnResponses = [
         { exitCode: 0, stdout: 'br version 0.4.1\n' },
         {
@@ -394,7 +417,7 @@ describe('BeadsRustTrackerPlugin', () => {
 
       expect(mockSpawnArgs.length).toBe(1);
       expect(mockSpawnArgs[0]?.cmd).toBe('br');
-      expect(mockSpawnArgs[0]?.args).toEqual(['list', '--json', '--type', 'epic']);
+      expect(mockSpawnArgs[0]?.args).toEqual(['list', '--json', '--type', 'epic', '--limit', '0']);
     });
 
     test('filters to top-level open/in_progress epics only', async () => {
@@ -472,6 +495,8 @@ describe('BeadsRustTrackerPlugin', () => {
         '--json',
         '--type',
         'epic',
+        '--limit',
+        '0',
         '--label',
         'a,b',
       ]);
