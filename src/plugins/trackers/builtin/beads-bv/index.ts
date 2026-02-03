@@ -672,7 +672,7 @@ export class BeadsBvTrackerPlugin extends BeadsTrackerPlugin {
    */
   private async getEpicChildrenIds(epicId: string): Promise<string[]> {
     const { stdout, exitCode } = await execBd(
-      ['list', '--json', '--parent', epicId],
+      ['list', '--json', '--parent', epicId, '--limit', '0'],
       this.getWorkingDir()
     );
 

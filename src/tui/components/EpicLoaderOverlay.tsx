@@ -5,13 +5,11 @@
  */
 
 import type { ReactNode } from 'react';
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useKeyboard } from '@opentui/react';
-import { relative } from 'node:path';
 import { colors, statusIndicators } from '../theme.js';
 import type { TrackerTask } from '../../plugins/trackers/types.js';
-import { findFiles } from '../../utils/files.js';
-import { fuzzySearch } from '../../utils/fuzzy-search.js';
+import { FileBrowser } from './FileBrowser.js';
 
 /**
  * Mode for the epic loader overlay
@@ -19,39 +17,61 @@ import { fuzzySearch } from '../../utils/fuzzy-search.js';
 export type EpicLoaderMode = 'list' | 'file-prompt';
 
 /**
- * Props for the EpicLoaderOverlay component
+ * Base props shared by all EpicLoaderOverlay modes
  */
-export interface EpicLoaderOverlayProps {
+interface EpicLoaderOverlayBaseProps {
   /** Whether the overlay is visible */
   visible: boolean;
 
-  /** Mode: 'list' for beads-style selection, 'file-prompt' for json-style */
-  mode: EpicLoaderMode;
+  /** Tracker name for display */
+  trackerName: string;
 
-  /** Available epics (for list mode) */
+  /** Callback when user cancels (Escape) */
+  onCancel: () => void;
+
+  /** Error message if loading failed */
+  error?: string;
+
+  /** Current epic ID (for highlighting) */
+  currentEpicId?: string;
+}
+
+/**
+ * Props for list mode (beads-style epic selection)
+ */
+interface EpicLoaderOverlayListProps extends EpicLoaderOverlayBaseProps {
+  mode: 'list';
+
+  /** Available epics */
   epics: TrackerTask[];
 
   /** Whether epics are loading */
   loading: boolean;
 
-  /** Error message if loading failed */
-  error?: string;
-
-  /** Tracker name for display */
-  trackerName: string;
-
-  /** Current epic ID (for highlighting) */
-  currentEpicId?: string;
-
   /** Callback when an epic is selected */
   onSelect: (epic: TrackerTask) => void;
 
-  /** Callback when user cancels (Escape) */
-  onCancel: () => void;
-
-  /** Callback when file path is submitted (file-prompt mode) */
-  onFilePath?: (path: string) => void;
+  onFilePath?: never;
 }
+
+/**
+ * Props for file-prompt mode (json-style file selection)
+ */
+interface EpicLoaderOverlayFilePromptProps extends EpicLoaderOverlayBaseProps {
+  mode: 'file-prompt';
+
+  /** Callback when file path is submitted */
+  onFilePath: (path: string) => void;
+
+  epics?: never;
+  loading?: never;
+  onSelect?: never;
+}
+
+/**
+ * Props for the EpicLoaderOverlay component - discriminated union by mode
+ */
+export type EpicLoaderOverlayProps = EpicLoaderOverlayListProps | EpicLoaderOverlayFilePromptProps;
 
 /**
  * Truncate text to fit within a given width
@@ -91,12 +111,6 @@ function getEpicStatusColor(epic: TrackerTask): string {
   }
 }
 
-/** Directories to exclude from JSON file search */
-const EXCLUDED_DIRS = ['node_modules', '.git', 'dist', 'build', '.next', 'coverage', '__pycache__'];
-
-/** Maximum number of file suggestions to display */
-const MAX_SUGGESTIONS = 8;
-
 /**
  * Modal overlay for loading/switching epics during a TUI session.
  * Supports two modes:
@@ -116,158 +130,66 @@ export function EpicLoaderOverlay({
   onFilePath,
 }: EpicLoaderOverlayProps): ReactNode {
   const [selectedIndex, setSelectedIndex] = useState(0);
-  const [filePath, setFilePath] = useState('');
 
-  // File suggestion state (for file-prompt mode)
-  const [jsonFiles, setJsonFiles] = useState<string[]>([]);
-  const [selectedFileIndex, setSelectedFileIndex] = useState(0);
-  const [filesLoading, setFilesLoading] = useState(false);
-
-  // Get current working directory for relative paths
-  const cwd = process.cwd();
-
-  // Compute filtered file suggestions based on current input
-  const filteredFiles = useMemo(() => {
-    if (jsonFiles.length === 0) return [];
-    // Convert to relative paths for display and matching
-    const relativePaths = jsonFiles.map((f) => {
-      const rel = relative(cwd, f);
-      return rel.startsWith('.') ? rel : './' + rel;
-    });
-    return fuzzySearch(relativePaths, filePath, MAX_SUGGESTIONS).map((m) => m.item);
-  }, [jsonFiles, filePath, cwd]);
-
-  // Reset state when overlay becomes visible
+  // Reset state when overlay becomes visible (list mode only)
   useEffect(() => {
-    if (visible) {
+    if (visible && mode === 'list' && epics) {
       // Find the currently selected epic in the list
       const currentIndex = epics.findIndex((e) => e.id === currentEpicId);
       setSelectedIndex(currentIndex >= 0 ? currentIndex : 0);
-      setFilePath('');
-      setSelectedFileIndex(0);
     }
-  }, [visible, epics, currentEpicId]);
+  }, [visible, mode, epics, currentEpicId]);
 
-  // Discover JSON files when overlay becomes visible in file-prompt mode
-  useEffect(() => {
-    if (visible && mode === 'file-prompt' && jsonFiles.length === 0 && !filesLoading) {
-      setFilesLoading(true);
-      findFiles(cwd, {
-        extension: '.json',
-        recursive: true,
-        maxDepth: 5,
-      })
-        .then((files) => {
-          // Filter out excluded directories
-          const filtered = files.filter((f) => {
-            const relPath = relative(cwd, f);
-            return !EXCLUDED_DIRS.some((dir) => relPath.startsWith(dir + '/') || relPath.startsWith(dir + '\\'));
-          });
-          setJsonFiles(filtered);
-        })
-        .catch(() => {
-          // Silently fail - file suggestions are optional
-        })
-        .finally(() => {
-          setFilesLoading(false);
-        });
-    }
-  }, [visible, mode, jsonFiles.length, filesLoading, cwd]);
-
-  // Reset file selection when filtered results change
-  useEffect(() => {
-    setSelectedFileIndex(0);
-  }, [filteredFiles.length]);
-
-  // Handle keyboard input
+  // Handle keyboard input (only for list mode - file-prompt uses FileBrowser)
   const handleKeyboard = useCallback(
     (key: { name: string; sequence?: string }) => {
-      if (!visible) return;
+      if (!visible || mode !== 'list') return;
 
-      if (mode === 'list') {
-        switch (key.name) {
-          case 'escape':
-            onCancel();
-            break;
+      switch (key.name) {
+        case 'escape':
+          onCancel();
+          break;
 
-          case 'up':
-          case 'k':
-            setSelectedIndex((prev) => Math.max(0, prev - 1));
-            break;
+        case 'up':
+        case 'k':
+          setSelectedIndex((prev) => Math.max(0, prev - 1));
+          break;
 
-          case 'down':
-          case 'j':
-            setSelectedIndex((prev) => Math.min(epics.length - 1, prev + 1));
-            break;
+        case 'down':
+        case 'j':
+          setSelectedIndex((prev) => Math.min(epics.length - 1, prev + 1));
+          break;
 
-          case 'return':
-          case 'enter':
-            if (epics.length > 0 && epics[selectedIndex]) {
-              onSelect(epics[selectedIndex]);
-            }
-            break;
-        }
-      } else if (mode === 'file-prompt') {
-        switch (key.name) {
-          case 'escape':
-            onCancel();
-            break;
-
-          case 'return':
-          case 'enter':
-            // If a suggestion is selected and there are suggestions, use it
-            if (filteredFiles.length > 0 && filteredFiles[selectedFileIndex]) {
-              const selected = filteredFiles[selectedFileIndex];
-              if (onFilePath) {
-                onFilePath(selected);
-              }
-            } else if (filePath.trim() && onFilePath) {
-              // Otherwise use the typed path
-              onFilePath(filePath.trim());
-            }
-            break;
-
-          case 'tab':
-            // Autocomplete with selected suggestion
-            if (filteredFiles.length > 0 && filteredFiles[selectedFileIndex]) {
-              setFilePath(filteredFiles[selectedFileIndex]);
-            }
-            break;
-
-          case 'up':
-            // Navigate suggestions up
-            if (filteredFiles.length > 0) {
-              setSelectedFileIndex((prev) => Math.max(0, prev - 1));
-            }
-            break;
-
-          case 'down':
-            // Navigate suggestions down
-            if (filteredFiles.length > 0) {
-              setSelectedFileIndex((prev) => Math.min(filteredFiles.length - 1, prev + 1));
-            }
-            break;
-
-          case 'backspace':
-            setFilePath((prev) => prev.slice(0, -1));
-            break;
-
-          default:
-            // Handle character input (including pasted text which may be multi-character)
-            if (key.sequence && key.name !== 'backspace') {
-              setFilePath((prev) => prev + key.sequence);
-            }
-            break;
-        }
+        case 'return':
+        case 'enter':
+          if (epics.length > 0 && epics[selectedIndex]) {
+            onSelect(epics[selectedIndex]);
+          }
+          break;
       }
     },
-    [visible, mode, epics, selectedIndex, filePath, filteredFiles, selectedFileIndex, onSelect, onCancel, onFilePath]
+    [visible, mode, epics, selectedIndex, onSelect, onCancel]
   );
 
   useKeyboard(handleKeyboard);
 
   if (!visible) {
     return null;
+  }
+
+  // Use FileBrowser for file-prompt mode
+  if (mode === 'file-prompt') {
+    return (
+      <FileBrowser
+        visible={visible}
+        fileExtension=".json"
+        filenamePrefix="prd"
+        trackerLabel={trackerName}
+        errorMessage={error}
+        onSelect={onFilePath}
+        onCancel={onCancel}
+      />
+    );
   }
 
   // Full-screen overlay with centered modal
@@ -287,7 +209,7 @@ export function EpicLoaderOverlay({
       <box
         style={{
           width: 70,
-          height: mode === 'file-prompt' ? 18 : 20,
+          height: 20,
           backgroundColor: colors.bg.secondary,
           border: true,
           borderColor: colors.accent.primary,
@@ -307,89 +229,12 @@ export function EpicLoaderOverlay({
             paddingRight: 1,
           }}
         >
-          <text fg={colors.accent.primary}>
-            {mode === 'list' ? 'Load Epic' : 'Enter PRD File Path'}
-          </text>
+          <text fg={colors.accent.primary}>Load Epic</text>
           <text fg={colors.fg.muted}>[{trackerName}]</text>
         </box>
 
         {/* Content */}
-        {mode === 'file-prompt' ? (
-          <box
-            style={{
-              flexGrow: 1,
-              flexDirection: 'column',
-              padding: 1,
-            }}
-          >
-            <text fg={colors.fg.secondary}>
-              Enter the path to a prd.json file:
-            </text>
-            <box style={{ height: 1 }} />
-            <box
-              style={{
-                width: '100%',
-                height: 1,
-                backgroundColor: colors.bg.primary,
-                paddingLeft: 1,
-              }}
-            >
-              <text fg={colors.fg.primary}>
-                {filePath}
-                <span fg={colors.accent.primary}>_</span>
-              </text>
-            </box>
-            <box style={{ height: 1 }} />
-
-            {/* File suggestions list */}
-            {filteredFiles.length > 0 && (
-              <box
-                style={{
-                  flexDirection: 'column',
-                  height: Math.min(filteredFiles.length, MAX_SUGGESTIONS),
-                }}
-              >
-                {filteredFiles.map((file, index) => {
-                  const isSelected = index === selectedFileIndex;
-                  return (
-                    <box
-                      key={file}
-                      style={{
-                        width: '100%',
-                        height: 1,
-                        flexDirection: 'row',
-                        backgroundColor: isSelected ? colors.bg.highlight : 'transparent',
-                      }}
-                    >
-                      <text fg={isSelected ? colors.accent.primary : 'transparent'}>
-                        {isSelected ? '▸ ' : '  '}
-                      </text>
-                      <text fg={isSelected ? colors.fg.primary : colors.fg.secondary}>
-                        {truncateText(file, 60)}
-                      </text>
-                    </box>
-                  );
-                })}
-              </box>
-            )}
-
-            {/* Show loading indicator or empty state */}
-            {filteredFiles.length === 0 && filesLoading && (
-              <text fg={colors.fg.muted}>  Searching for JSON files...</text>
-            )}
-            {filteredFiles.length === 0 && !filesLoading && filePath.length > 0 && (
-              <text fg={colors.fg.muted}>  No matching files found</text>
-            )}
-
-            <box style={{ flexGrow: 1 }} />
-            <text fg={colors.fg.muted}>
-              <span fg={colors.accent.primary}>↑↓</span> Navigate{'  '}
-              <span fg={colors.accent.primary}>Enter</span> Select{'  '}
-              <span fg={colors.accent.primary}>Tab</span> Complete{'  '}
-              <span fg={colors.accent.primary}>Esc</span> Cancel
-            </text>
-          </box>
-        ) : loading ? (
+        {loading ? (
           <box
             style={{
               flexGrow: 1,
@@ -494,30 +339,28 @@ export function EpicLoaderOverlay({
           </box>
         )}
 
-        {/* Footer - only shown for list mode (file-prompt has inline help) */}
-        {mode === 'list' && (
-          <box
-            style={{
-              width: '100%',
-              height: 2,
-              flexDirection: 'row',
-              justifyContent: 'center',
-              alignItems: 'center',
-              backgroundColor: colors.bg.tertiary,
-              gap: 3,
-            }}
-          >
-            <text fg={colors.fg.muted}>
-              <span fg={colors.accent.primary}>Enter</span> Select
-            </text>
-            <text fg={colors.fg.muted}>
-              <span fg={colors.accent.primary}>↑↓/jk</span> Navigate
-            </text>
-            <text fg={colors.fg.muted}>
-              <span fg={colors.accent.primary}>Esc</span> Cancel
-            </text>
-          </box>
-        )}
+        {/* Footer */}
+        <box
+          style={{
+            width: '100%',
+            height: 2,
+            flexDirection: 'row',
+            justifyContent: 'center',
+            alignItems: 'center',
+            backgroundColor: colors.bg.tertiary,
+            gap: 3,
+          }}
+        >
+          <text fg={colors.fg.muted}>
+            <span fg={colors.accent.primary}>Enter</span> Select
+          </text>
+          <text fg={colors.fg.muted}>
+            <span fg={colors.accent.primary}>↑↓/jk</span> Navigate
+          </text>
+          <text fg={colors.fg.muted}>
+            <span fg={colors.accent.primary}>Esc</span> Cancel
+          </text>
+        </box>
       </box>
     </box>
   );

@@ -336,7 +336,7 @@ export class BeadsRustTrackerPlugin extends BaseTrackerPlugin {
 
   override async getTasks(filter?: TaskFilter): Promise<TrackerTask[]> {
     // Always include closed tasks; UI controls visibility.
-    const args = ['list', '--json', '--all'];
+    const args = ['list', '--json', '--all', '--limit', '0'];
 
     // Note: br list doesn't support --parent, so we filter in-memory below
     const parentId = filter?.parentId ?? this.epicId;
@@ -391,7 +391,7 @@ export class BeadsRustTrackerPlugin extends BaseTrackerPlugin {
    * Queries for tasks with type='epic' and filters to top-level open/in_progress only.
    */
   override async getEpics(): Promise<TrackerTask[]> {
-    const args = ['list', '--json', '--type', 'epic'];
+    const args = ['list', '--json', '--type', 'epic', '--limit', '0'];
 
     if (this.labels.length > 0) {
       args.push('--label', this.labels.join(','));
