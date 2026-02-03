@@ -348,6 +348,15 @@ export function FileBrowser({
           }
           break;
 
+        case 'tab':
+          // Tab selects the highlighted entry (convenient keyboard shortcut)
+          if (searchQuery && filteredEntries.length > 0) {
+            enterOrSelect();
+          } else if (!searchQuery && selectedIndex > 0) {
+            enterOrSelect();
+          }
+          break;
+
         case 'left':
           // Clear search first, then go to parent
           if (searchQuery) {
