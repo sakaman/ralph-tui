@@ -2395,6 +2395,12 @@ export function RunApp({
     const isRunning = selectedIteration?.status === 'running';
     if (isRunning) return;
 
+    // Don't load historical data when viewing the currently executing task from tasks view
+    // (no iteration selected). Live output should be shown instead of stale disk data.
+    const isCurrentlyExecutingTask = selectedTask?.id === currentTaskId && selectedTask?.status === 'active';
+    const isTasksView = !selectedIteration;
+    if (isCurrentlyExecutingTask && isTasksView) return;
+
     // For active tasks, only load historical if no current iteration yet (resume scenario)
     // This allows showing previous output when resuming an in-progress task
     const isActiveTask = selectedTask?.status === 'active';
