@@ -1088,8 +1088,14 @@ export class ExecutionEngine {
       const taskCompleted = promiseComplete;
 
       // Update tracker if task completed
+      // In worker mode (forcedTask set), skip tracker update — the ParallelExecutor
+      // will call completeTask after the merge succeeds. This avoids race conditions
+      // when multiple workers try to update the tracker concurrently.
+      // See: https://github.com/subsy/ralph-tui/issues/275
       if (taskCompleted) {
-        await this.tracker!.completeTask(task.id, 'Completed by agent');
+        if (!this.forcedTask) {
+          await this.tracker!.completeTask(task.id, 'Completed by agent');
+        }
         this.emit({
           type: 'task:completed',
           timestamp: new Date().toISOString(),
