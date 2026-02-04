@@ -169,14 +169,15 @@ export const ConflictResolutionPanel = memo(function ConflictResolutionPanel({
           <text fg={colors.border.muted}>{'─'.repeat(56)}</text>
         </box>
         <text>
-          <span fg={colors.accent.tertiary}>a</span>
-          <span fg={colors.fg.muted}> Accept  </span>
-          <span fg={colors.accent.tertiary}>r</span>
-          <span fg={colors.fg.muted}> Reject  </span>
-          <span fg={colors.accent.tertiary}>A</span>
-          <span fg={colors.fg.muted}> Accept All  </span>
+          <span fg={colors.accent.tertiary}>j/↓</span>
+          <span fg={colors.fg.muted}> Down  </span>
+          <span fg={colors.accent.tertiary}>k/↑</span>
+          <span fg={colors.fg.muted}> Up  </span>
           <span fg={colors.accent.tertiary}>Esc</span>
-          <span fg={colors.fg.muted}> Abort + Rollback</span>
+          <span fg={colors.fg.muted}> Close Panel</span>
+        </text>
+        <text fg={colors.fg.dim}>
+          AI resolution runs automatically. Merge completes when all files resolve.
         </text>
       </box>
     </box>
