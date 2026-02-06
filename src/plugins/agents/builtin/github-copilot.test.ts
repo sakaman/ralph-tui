@@ -47,7 +47,7 @@ describe('GithubCopilotAgentPlugin', () => {
         });
 
         test('has no structured output format', () => {
-            expect(plugin.meta.structuredOutputFormat).toBe('jsonl');
+            expect(plugin.meta.structuredOutputFormat).toBe(undefined);
         });
     });
 

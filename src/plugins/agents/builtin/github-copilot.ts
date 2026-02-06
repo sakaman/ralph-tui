@@ -31,7 +31,7 @@ export class GithubCopilotAgentPlugin extends BaseAgentPlugin {
         supportsInterrupt: true,
         supportsFileContext: false,
         supportsSubagentTracing: false,
-        structuredOutputFormat: 'jsonl',
+        structuredOutputFormat: undefined,
         skillsPaths: {
           personal: '~/.copilot/skills',
           repo: '.copilot/skills',
@@ -194,7 +194,7 @@ export class GithubCopilotAgentPlugin extends BaseAgentPlugin {
 
         // Auto-approve mode
         if (this.autoApprove) {
-            args.push('--yes');
+            args.push('--yolo');
         }
 
         // Note: Prompt is passed via stdin (see getStdinInput)
