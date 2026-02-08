@@ -77,7 +77,7 @@ export class GithubCopilotAgentPlugin extends BaseAgentPlugin {
         if (!findResult.found) {
             return {
                 available: false,
-                error: `GitHub Copilot CLI not found in PATH. Install from: https://github.com/cli/cli`,
+                error: `GitHub Copilot CLI ('copilot') not found in PATH. Install via 'npm install -g @github/copilot' or visit https://gh.io/copilot-install`,
             };
         }
 
