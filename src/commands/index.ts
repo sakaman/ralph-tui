@@ -97,3 +97,7 @@ export {
   parseRemoteArgs,
   printRemoteHelp,
 } from './remote.js';
+
+export {
+  createCompletionCommand,
+} from './completion.js';

@@ -22,6 +22,7 @@ import {
   executeInfoCommand,
   executeSkillsCommand,
   executeRemoteCommand,
+  createCompletionCommand,
 } from './commands/index.js';
 
 /**
@@ -52,6 +53,7 @@ Commands:
   skills install      Install skills to ~/.claude/skills/
   plugins agents      List available agent plugins
   plugins trackers    List available tracker plugins
+  completion          Manage shell completion
   docs [section]      Open documentation in browser
   info [options]      Display system information for bug reports
   help, --help, -h    Show this help message
@@ -238,6 +240,13 @@ async function handleSubcommand(args: string[]): Promise<boolean> {
   // Remote command (manage remote configurations)
   if (command === 'remote') {
     await executeRemoteCommand(args.slice(1));
+    return true;
+  }
+
+  // Completion command (shell completion management)
+  if (command === 'completion') {
+    const completionCommand = createCompletionCommand();
+    await completionCommand.parseAsync(args, { from: 'user' });
     return true;
   }
 
