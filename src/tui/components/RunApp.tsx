@@ -192,6 +192,8 @@ export interface RunAppProps {
   activeWorkerCount?: number;
   /** Total number of workers */
   totalWorkerCount?: number;
+  /** Failure message for parallel execution */
+  parallelFailureMessage?: string;
   /** Callback to pause parallel execution */
   onParallelPause?: () => void;
   /** Callback to resume parallel execution */
@@ -459,6 +461,7 @@ export function RunApp({
   parallelCompletedLocallyTaskIds,
   parallelAutoCommitSkippedTaskIds: _parallelAutoCommitSkippedTaskIds, // Reserved for future status bar warning
   parallelMergedTaskIds,
+  parallelFailureMessage,
   activeWorkerCount,
   totalWorkerCount,
   onParallelPause,
@@ -472,6 +475,11 @@ export function RunApp({
   const renderer = useRenderer();
   // Copy feedback message state (auto-dismissed after 2s)
   const [copyFeedback, setCopyFeedback] = useState<string | null>(null);
+  useEffect(() => {
+    if (isParallelMode && parallelFailureMessage) {
+      setStatus('error');
+    }
+  }, [isParallelMode, parallelFailureMessage]);
   // Info feedback message state (auto-dismissed after 4s, for hints/tips)
   const [infoFeedback, setInfoFeedback] = useState<string | null>(null);
   const [tasks, setTasks] = useState<TaskItem[]>(() => {
@@ -2878,6 +2886,18 @@ export function RunApp({
           />
         );
       })()}
+
+      {/* Parallel failure banner */}
+      {isParallelMode && parallelFailureMessage && (
+        <Toast
+          visible={true}
+          message={parallelFailureMessage}
+          icon={'⚠'}
+          variant="error"
+          bottom={6}
+          right={2}
+        />
+      )}
 
       {/* Interrupt Confirmation Dialog */}
       <ConfirmationDialog
