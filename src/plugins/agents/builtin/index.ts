@@ -11,6 +11,7 @@ import createGeminiAgent from './gemini.js';
 import createCodexAgent from './codex.js';
 import createKiroAgent from './kiro.js';
 import createCursorAgent from './cursor.js';
+import createGithubCopilotAgent from './github-copilot.js';
 import createIFlowAgent from './iflow.js';
 
 /**
@@ -28,6 +29,7 @@ export function registerBuiltinAgents(): void {
   registry.registerBuiltin(createCodexAgent);
   registry.registerBuiltin(createKiroAgent);
   registry.registerBuiltin(createCursorAgent);
+  registry.registerBuiltin(createGithubCopilotAgent);
   registry.registerBuiltin(createIFlowAgent);
 }
 
@@ -40,6 +42,7 @@ export {
   createCodexAgent,
   createKiroAgent,
   createCursorAgent,
+  createGithubCopilotAgent,
   createIFlowAgent,
 };
 
@@ -52,4 +55,5 @@ export { GeminiAgentPlugin } from './gemini.js';
 export { CodexAgentPlugin } from './codex.js';
 export { KiroAgentPlugin } from './kiro.js';
 export { CursorAgentPlugin } from './cursor.js';
+export { GithubCopilotAgentPlugin } from './github-copilot.js';
 export { IFlowAgentPlugin } from './iflow.js';
