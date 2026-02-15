@@ -3,9 +3,9 @@
  * Integrates with the iFlow CLI agent for AI-assisted development.
  */
 
-import { exec } from 'child_process';
+import { exec, spawn, type ChildProcess } from 'child_process';
 import { promisify } from 'util';
-import { BaseAgentPlugin } from '../base.js';
+import { BaseAgentPlugin, findCommandPath, quoteForWindowsShell } from '../base.js';
 import type {
   AgentPluginMeta,
   AgentDetectResult,
@@ -18,49 +18,68 @@ import type {
 
 const execAsync = promisify(exec);
 
+/** Counter for generating unique execution IDs */
+let executionCounter = 0;
+
+/**
+ * Generate a unique execution ID.
+ */
+function generateExecutionId(): string {
+  executionCounter++;
+  return `iflow-${Date.now()}-${executionCounter}`;
+}
+
 /**
  * iFlow CLI Agent plugin implementation.
  */
 export class IFlowAgentPlugin extends BaseAgentPlugin {
-  constructor() {
-    const meta: AgentPluginMeta = {
-      id: 'iflow',
-      name: 'iFlow CLI',
-      description: 'iFlow CLI agent for AI-assisted development',
-      version: '1.0.0',
-      author: 'Ralph TUI Team',
-      defaultCommand: 'iflow',
-      supportsStreaming: true,
-      supportsInterrupt: true,
-      supportsFileContext: true,
-      supportsSubagentTracing: false, // iFlow doesn't support structured output yet
-      structuredOutputFormat: undefined,
-      skillsPaths: {
-        personal: '~/.iflow/skills/',
-        repo: '.iflow/skills/',
-      },
-    };
-    super(meta);
-  }
+  readonly meta: AgentPluginMeta = {
+    id: 'iflow-cli',
+    name: 'iFlow CLI',
+    description: 'iFlow CLI agent for AI-assisted development',
+    version: '1.0.0',
+    author: 'Ralph TUI Team',
+    defaultCommand: 'iflow',
+    supportsStreaming: true,
+    supportsInterrupt: true,
+    supportsFileContext: true,
+    supportsSubagentTracing: false, // iFlow doesn't support structured output yet
+    structuredOutputFormat: undefined,
+    skillsPaths: {
+      personal: '~/.iflow/skills/',
+      repo: '.iflow/skills/',
+    },
+  };
+
+  /** Current running process (if any) */
+  private currentProcess?: ChildProcess;
 
   /**
    * Initialize the plugin with configuration.
    */
-  async initialize(config: Record<string, unknown>): Promise<void> {
-    // iFlow-specific configuration can be added here
+  override async initialize(config: Record<string, unknown>): Promise<void> {
     await super.initialize(config);
   }
 
   /**
    * Detect if iFlow CLI is available on the system.
    */
-  async detect(): Promise<AgentDetectResult> {
+  override async detect(): Promise<AgentDetectResult> {
+    const command = this.commandPath ?? this.meta.defaultCommand;
+    const findResult = await findCommandPath(command);
+
+    if (!findResult.found) {
+      return {
+        available: false,
+        error: `iFlow CLI not found in PATH. Install from: https://github.com/sakaman/iflow`,
+      };
+    }
+
     try {
-      const { stdout, stderr } = await execAsync('iflow --version', {
+      const { stdout, stderr } = await execAsync(`"${findResult.path}" --version`, {
         timeout: 10000,
       });
 
-      // Extract version from output
       const versionMatch = stdout.match(/iflow\s+v?(\d+\.\d+\.\d+)/i) ||
                           stderr.match(/iflow\s+v?(\d+\.\d+\.\d+)/i);
 
@@ -69,11 +88,12 @@ export class IFlowAgentPlugin extends BaseAgentPlugin {
       return {
         available: true,
         version,
-        executablePath: 'iflow', // Assume it's in PATH
+        executablePath: findResult.path,
       };
     } catch (error) {
       return {
         available: false,
+        executablePath: findResult.path,
         error: error instanceof Error ? error.message : String(error),
       };
     }
@@ -82,12 +102,12 @@ export class IFlowAgentPlugin extends BaseAgentPlugin {
   /**
    * Execute iFlow CLI with the given prompt.
    */
-  execute(
+  override execute(
     prompt: string,
     files?: import('../types.js').AgentFileContext[],
     options?: AgentExecuteOptions
   ): AgentExecutionHandle {
-    const executionId = this.generateExecutionId();
+    const executionId = generateExecutionId();
     const startTime = Date.now();
     const startTimestamp = new Date().toISOString();
 
@@ -112,36 +132,53 @@ export class IFlowAgentPlugin extends BaseAgentPlugin {
       args.push('--timeout', Math.ceil(options.timeout / 1000).toString());
     }
 
-    // Add any additional flags
+    // Add any additional flags from options
     if (options?.flags) {
       args.push(...options.flags);
     }
 
-    // Add the prompt as the final argument
-    args.push('--prompt', prompt);
+    // Add default flags
+    if (this.defaultFlags.length > 0) {
+      args.push(...this.defaultFlags);
+    }
 
-    const command = `iflow ${args.join(' ')}`;
     const cwd = options?.cwd || process.cwd();
+    const command = this.commandPath ?? this.meta.defaultCommand;
 
     // Set up environment variables
     const env = { ...process.env, ...options?.env };
 
-    // Start the execution
-    const childProcess = exec(command, { cwd, env });
+    // Start the execution using spawn for better control
+    const childProcess = spawn(command, args, {
+      cwd,
+      env,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      shell: process.platform === 'win32',
+    });
+
+    // Store the process for interruption
+    this.currentProcess = childProcess;
+
+    // Write prompt to stdin
+    childProcess.stdin?.write(prompt);
+    childProcess.stdin?.end();
+
     const executionPromise = new Promise<AgentExecutionResult>((resolve) => {
       let stdout = '';
       let stderr = '';
 
       // Handle stdout streaming
-      childProcess.stdout?.on('data', (data: string) => {
-        stdout += data;
-        options?.onStdout?.(data);
+      childProcess.stdout?.on('data', (data: Buffer) => {
+        const chunk = data.toString();
+        stdout += chunk;
+        options?.onStdout?.(chunk);
       });
 
       // Handle stderr streaming
-      childProcess.stderr?.on('data', (data: string) => {
-        stderr += data;
-        options?.onStderr?.(data);
+      childProcess.stderr?.on('data', (data: Buffer) => {
+        const chunk = data.toString();
+        stderr += chunk;
+        options?.onStderr?.(chunk);
       });
 
       childProcess.on('close', (code) => {
@@ -167,6 +204,7 @@ export class IFlowAgentPlugin extends BaseAgentPlugin {
           result.error = stderr.trim();
         }
 
+        this.currentProcess = undefined;
         resolve(result);
         options?.onEnd?.(result);
       });
@@ -188,6 +226,7 @@ export class IFlowAgentPlugin extends BaseAgentPlugin {
           endedAt: endTimestamp,
         };
 
+        this.currentProcess = undefined;
         resolve(result);
         options?.onEnd?.(result);
       });
@@ -200,13 +239,12 @@ export class IFlowAgentPlugin extends BaseAgentPlugin {
       executionId,
       promise: executionPromise,
       interrupt: () => {
-        childProcess.kill('SIGINT');
+        if (this.currentProcess && !this.currentProcess.killed) {
+          this.currentProcess.kill('SIGINT');
+        }
       },
-      isRunning: () => !childProcess.killed,
+      isRunning: () => this.currentProcess !== undefined && !this.currentProcess.killed,
     };
-
-    // Store the execution
-    this.currentExecution = handle;
 
     return handle;
   }
@@ -214,7 +252,7 @@ export class IFlowAgentPlugin extends BaseAgentPlugin {
   /**
    * Get setup questions for configuring iFlow.
    */
-  getSetupQuestions(): AgentSetupQuestion[] {
+  override getSetupQuestions(): AgentSetupQuestion[] {
     return [
       {
         id: 'iflowPath',
@@ -236,14 +274,13 @@ export class IFlowAgentPlugin extends BaseAgentPlugin {
   /**
    * Validate iFlow configuration.
    */
-  async validateSetup(answers: Record<string, unknown>): Promise<string | null> {
+  override async validateSetup(answers: Record<string, unknown>): Promise<string | null> {
     const iflowPath = answers.iflowPath as string;
     
     if (iflowPath && iflowPath.trim()) {
       try {
-        // Test if the specified path exists and is executable
         await execAsync(`"${iflowPath}" --version`);
-      } catch (error) {
+      } catch {
         return `Cannot execute iFlow at path: ${iflowPath}. Please check the path is correct.`;
       }
     }
@@ -254,7 +291,7 @@ export class IFlowAgentPlugin extends BaseAgentPlugin {
   /**
    * Validate model name for iFlow.
    */
-  validateModel(model: string): string | null {
+  override validateModel(_model: string): string | null {
     // iFlow supports various models, no strict validation needed
     return null;
   }
@@ -262,7 +299,7 @@ export class IFlowAgentPlugin extends BaseAgentPlugin {
   /**
    * Run preflight check for iFlow.
    */
-  async preflight(options?: { timeout?: number }): Promise<AgentPreflightResult> {
+  override async preflight(options?: { timeout?: number }): Promise<AgentPreflightResult> {
     const startTime = Date.now();
     
     try {
@@ -301,11 +338,22 @@ export class IFlowAgentPlugin extends BaseAgentPlugin {
       };
     }
   }
+
+  /**
+   * Clean up resources.
+   */
+  override async dispose(): Promise<void> {
+    if (this.currentProcess && !this.currentProcess.killed) {
+      this.currentProcess.kill('SIGTERM');
+      this.currentProcess = undefined;
+    }
+    await super.dispose();
+  }
 }
 
 /**
  * Factory function for creating iFlow agent plugin instances.
  */
-export default function createIFlowAgent(): IFlowAgentPlugin {
-  return new IFlowAgentPlugin();
-}
+const createIFlowAgent: import('../types.js').AgentPluginFactory = () => new IFlowAgentPlugin();
+
+export default createIFlowAgent;
