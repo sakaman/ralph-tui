@@ -5,6 +5,8 @@
 
 import { exec } from 'child_process';
 import { promisify } from 'util';
+import * as fs from 'fs';
+import * as path from 'path';
 
 const execAsync = promisify(exec);
 
@@ -25,6 +27,78 @@ export interface ShellCompletionConfig {
   
   /** Path to completion script */
   scriptPath?: string;
+}
+
+/**
+ * Shell info for display purposes.
+ */
+export interface ShellInfo {
+  type: ShellType;
+  name: string;
+  description: string;
+  configPath: string;
+  completionPath: string;
+}
+
+/**
+ * Get information about supported shells.
+ */
+export function getSupportedShells(): ShellInfo[] {
+  const home = process.env.HOME || process.env.USERPROFILE || '';
+  const userProfile = process.env.USERPROFILE || '';
+  
+  return [
+    {
+      type: 'bash',
+      name: 'Bash',
+      description: 'Bourne Again Shell',
+      configPath: `${home}/.bashrc`,
+      completionPath: `${home}/.local/share/bash-completion/completions/ralph-tui`,
+    },
+    {
+      type: 'zsh',
+      name: 'Zsh',
+      description: 'Z Shell',
+      configPath: `${home}/.zshrc`,
+      completionPath: `${home}/.zsh/completion/_ralph-tui`,
+    },
+    {
+      type: 'fish',
+      name: 'Fish',
+      description: 'Friendly Interactive Shell',
+      configPath: `${home}/.config/fish/config.fish`,
+      completionPath: `${home}/.config/fish/completions/ralph-tui.fish`,
+    },
+    {
+      type: 'powershell',
+      name: 'PowerShell',
+      description: 'Windows PowerShell',
+      configPath: `${userProfile}\\Documents\\WindowsPowerShell\\Microsoft.PowerShell_profile.ps1`,
+      completionPath: `${userProfile}\\Documents\\WindowsPowerShell\\Microsoft.PowerShell_profile.ps1`,
+    },
+  ];
+}
+
+/**
+ * Detect the current shell.
+ */
+export async function detectShell(): Promise<ShellType> {
+  const shell = process.env.SHELL || '';
+  
+  if (shell.includes('bash')) return 'bash';
+  if (shell.includes('zsh')) return 'zsh';
+  if (shell.includes('fish')) return 'fish';
+  if (process.platform === 'win32') return 'powershell';
+  
+  // Default to bash for Unix-like systems
+  return 'bash';
+}
+
+/**
+ * Get shell info by type.
+ */
+export function getShellInfo(shellType: ShellType): ShellInfo | undefined {
+  return getSupportedShells().find(s => s.type === shellType);
 }
 
 /**
@@ -57,7 +131,7 @@ _ralph_tui() {
 
   case "\${prev}" in
     --agent)
-      COMPREPLY=(\$(compgen -W "claude opencode iflow gemini codex kiro cursor droid" -- "\$cur"))
+      COMPREPLY=(\$(compgen -W "claude opencode iflow-cli gemini codex kiro cursor droid" -- "\$cur"))
       ;;
     --model)
       # Model completion would be agent-specific
@@ -84,6 +158,9 @@ _ralph_tui() {
         COMPREPLY=(\$(compgen -W "
           chat task prd skills setup
           config status version help
+          run resume logs listen remote
+          completion convert create-prd doctor
+          info plugins template
         " -- "\$cur"))
       fi
       ;;
@@ -106,23 +183,40 @@ _ralph_tui() {
   local -a commands flags
   
   commands=(
+    'run:Run Ralph TUI execution loop'
+    'resume:Resume an interrupted session'
+    'status:Show session status'
+    'logs:View iteration logs'
+    'listen:Run with remote listener'
+    'remote:Manage remote connections'
+    'completion:Manage shell completion'
+    'convert:Convert PRD format'
+    'create-prd:Create a PRD interactively'
+    'doctor:Run diagnostics'
+    'info:Show system info'
+    'plugins:List plugins'
+    'template:Show prompt template'
     'chat:Start a chat session'
     'task:Execute a one-off task'
     'prd:Generate a PRD'
     'skills:Manage skills'
     'setup:Setup wizard'
     'config:Configuration management'
-    'status:Show status'
     'version:Show version'
     'help:Show help'
   )
+  
+  if (( CURRENT == 2 )); then
+    _describe 'command' commands
+    return
+  fi
   
   flags=(
     '--help[Show help]'
     '--version[Show version]'
     '--verbose[Verbose output]'
     '--quiet[Quiet output]'
-    '--agent[Specify agent]:agent:(claude opencode iflow gemini codex kiro cursor droid)'
+    '--agent[Specify agent]:agent:(claude opencode iflow-cli gemini codex kiro cursor droid)'
     '--model[Specify model]:model'
     '--skill[Specify skill]:skill'
     '--timeout[Execution timeout]:timeout'
@@ -142,10 +236,9 @@ _ralph_tui() {
     '--log-level[Log level]:level:(debug info warn error)'
   )
   
-  _arguments -C \\
-    \${commands[@]} \\
+  _arguments -s -S \\
     \${flags[@]} \\
-    && return 0
+    '*:: :->_default'
 }
 
 _ralph_tui "\$@"
@@ -161,13 +254,25 @@ function generateFishCompletion(): string {
 complete -c ralph-tui -f
 
 # Commands
+complete -c ralph-tui -n __fish_use_subcommand -a run -d 'Run Ralph TUI execution loop'
+complete -c ralph-tui -n __fish_use_subcommand -a resume -d 'Resume an interrupted session'
+complete -c ralph-tui -n __fish_use_subcommand -a status -d 'Show session status'
+complete -c ralph-tui -n __fish_use_subcommand -a logs -d 'View iteration logs'
+complete -c ralph-tui -n __fish_use_subcommand -a listen -d 'Run with remote listener'
+complete -c ralph-tui -n __fish_use_subcommand -a remote -d 'Manage remote connections'
+complete -c ralph-tui -n __fish_use_subcommand -a completion -d 'Manage shell completion'
+complete -c ralph-tui -n __fish_use_subcommand -a convert -d 'Convert PRD format'
+complete -c ralph-tui -n __fish_use_subcommand -a create-prd -d 'Create a PRD interactively'
+complete -c ralph-tui -n __fish_use_subcommand -a doctor -d 'Run diagnostics'
+complete -c ralph-tui -n __fish_use_subcommand -a info -d 'Show system info'
+complete -c ralph-tui -n __fish_use_subcommand -a plugins -d 'List plugins'
+complete -c ralph-tui -n __fish_use_subcommand -a template -d 'Show prompt template'
 complete -c ralph-tui -n __fish_use_subcommand -a chat -d 'Start a chat session'
 complete -c ralph-tui -n __fish_use_subcommand -a task -d 'Execute a one-off task'
 complete -c ralph-tui -n __fish_use_subcommand -a prd -d 'Generate a PRD'
 complete -c ralph-tui -n __fish_use_subcommand -a skills -d 'Manage skills'
 complete -c ralph-tui -n __fish_use_subcommand -a setup -d 'Setup wizard'
 complete -c ralph-tui -n __fish_use_subcommand -a config -d 'Configuration management'
-complete -c ralph-tui -n __fish_use_subcommand -a status -d 'Show status'
 complete -c ralph-tui -n __fish_use_subcommand -a version -d 'Show version'
 complete -c ralph-tui -n __fish_use_subcommand -a help -d 'Show help'
 
@@ -176,7 +281,7 @@ complete -c ralph-tui -l help -d 'Show help'
 complete -c ralph-tui -l version -d 'Show version'
 complete -c ralph-tui -l verbose -d 'Verbose output'
 complete -c ralph-tui -l quiet -d 'Quiet output'
-complete -c ralph-tui -l agent -d 'Specify agent' -xa 'claude opencode iflow gemini codex kiro cursor droid'
+complete -c ralph-tui -l agent -d 'Specify agent' -xa 'claude opencode iflow-cli gemini codex kiro cursor droid'
 complete -c ralph-tui -l model -d 'Specify model'
 complete -c ralph-tui -l skill -d 'Specify skill'
 complete -c ralph-tui -l timeout -d 'Execution timeout'
@@ -207,13 +312,25 @@ Register-ArgumentCompleter -CommandName ralph-tui -ScriptBlock {
     param(\$wordToComplete, \$commandAst, \$cursorPosition)
     
     \$commands = @(
+        @{ Name = 'run'; Description = 'Run Ralph TUI execution loop' }
+        @{ Name = 'resume'; Description = 'Resume an interrupted session' }
+        @{ Name = 'status'; Description = 'Show session status' }
+        @{ Name = 'logs'; Description = 'View iteration logs' }
+        @{ Name = 'listen'; Description = 'Run with remote listener' }
+        @{ Name = 'remote'; Description = 'Manage remote connections' }
+        @{ Name = 'completion'; Description = 'Manage shell completion' }
+        @{ Name = 'convert'; Description = 'Convert PRD format' }
+        @{ Name = 'create-prd'; Description = 'Create a PRD interactively' }
+        @{ Name = 'doctor'; Description = 'Run diagnostics' }
+        @{ Name = 'info'; Description = 'Show system info' }
+        @{ Name = 'plugins'; Description = 'List plugins' }
+        @{ Name = 'template'; Description = 'Show prompt template' }
         @{ Name = 'chat'; Description = 'Start a chat session' }
         @{ Name = 'task'; Description = 'Execute a one-off task' }
         @{ Name = 'prd'; Description = 'Generate a PRD' }
         @{ Name = 'skills'; Description = 'Manage skills' }
         @{ Name = 'setup'; Description = 'Setup wizard' }
         @{ Name = 'config'; Description = 'Configuration management' }
-        @{ Name = 'status'; Description = 'Show status' }
         @{ Name = 'version'; Description = 'Show version' }
         @{ Name = 'help'; Description = 'Show help' }
     )
@@ -227,7 +344,7 @@ Register-ArgumentCompleter -CommandName ralph-tui -ScriptBlock {
         '--setup', '--config-path', '--log-level'
     )
     
-    \$agents = @('claude', 'opencode', 'iflow', 'gemini', 'codex', 'kiro', 'cursor', 'droid')
+    \$agents = @('claude', 'opencode', 'iflow-cli', 'gemini', 'codex', 'kiro', 'cursor', 'droid')
     \$logLevels = @('debug', 'info', 'warn', 'error')
     
     if (\$wordToComplete -match '^--') {
@@ -246,9 +363,14 @@ Register-ArgumentCompleter -CommandName ralph-tui -ScriptBlock {
 /**
  * Install shell completion for the current shell.
  */
-export async function installShellCompletion(shell?: ShellType): Promise<void> {
+export async function installShellCompletion(shell?: ShellType): Promise<ShellInfo> {
   const detectedShell = shell || await detectShell();
   const script = generateCompletionScript(detectedShell);
+  const shellInfo = getShellInfo(detectedShell);
+  
+  if (!shellInfo) {
+    throw new Error(`Unknown shell: ${detectedShell}`);
+  }
   
   switch (detectedShell) {
     case 'bash':
@@ -266,68 +388,65 @@ export async function installShellCompletion(shell?: ShellType): Promise<void> {
     default:
       throw new Error(`Cannot install completion for shell: ${detectedShell}`);
   }
-}
-
-/**
- * Detect the current shell.
- */
-async function detectShell(): Promise<ShellType> {
-  const shell = process.env.SHELL || '';
   
-  if (shell.includes('bash')) return 'bash';
-  if (shell.includes('zsh')) return 'zsh';
-  if (shell.includes('fish')) return 'fish';
-  if (process.platform === 'win32') return 'powershell';
-  
-  // Default to bash for Unix-like systems
-  return 'bash';
+  return shellInfo;
 }
 
 /**
  * Install bash completion.
  */
 async function installBashCompletion(script: string): Promise<void> {
-  const bashrcPath = `${process.env.HOME}/.bashrc`;
-  const completionPath = `${process.env.HOME}/.local/share/bash-completion/completions/ralph-tui`;
+  const home = process.env.HOME || '';
+  const completionDir = `${home}/.local/share/bash-completion/completions`;
+  const completionPath = `${completionDir}/ralph-tui`;
   
-  try {
-    // Try system completion directory first
-    await execAsync(`mkdir -p "${process.env.HOME}/.local/share/bash-completion/completions"`);
-    await execAsync(`echo '${script.replace(/'/g, "'\\''")}' > "${completionPath}"`);
-    console.log('Bash completion installed to:', completionPath);
-  } catch (error) {
-    // Fallback to .bashrc
-    await execAsync(`echo '${script.replace(/'/g, "'\\''")}' >> "${bashrcPath}"`);
-    console.log('Bash completion added to:', bashrcPath);
-  }
+  // Ensure directory exists
+  await fs.promises.mkdir(completionDir, { recursive: true });
+  
+  // Write completion script
+  await fs.promises.writeFile(completionPath, script, 'utf-8');
 }
 
 /**
  * Install zsh completion.
  */
 async function installZshCompletion(script: string): Promise<void> {
-  const completionPath = `${process.env.HOME}/.zsh/completion/_ralph-tui`;
+  const home = process.env.HOME || '';
+  const completionDir = `${home}/.zsh/completion`;
+  const completionPath = `${completionDir}/_ralph-tui`;
+  
+  // Ensure directory exists
+  await fs.promises.mkdir(completionDir, { recursive: true });
+  
+  // Write completion script
+  await fs.promises.writeFile(completionPath, script, 'utf-8');
+  
+  // Add to fpath in .zshrc if not already there
+  const zshrcPath = `${home}/.zshrc`;
+  const fpathLine = 'fpath=($HOME/.zsh/completion $fpath)';
+  const compinitLine = 'autoload -Uz compinit && compinit';
   
   try {
-    await execAsync(`mkdir -p "${process.env.HOME}/.zsh/completion"`);
-    await execAsync(`echo '${script.replace(/'/g, "'\\''")}' > "${completionPath}"`);
-    
-    // Add to fpath
-    const zshrcPath = `${process.env.HOME}/.zshrc`;
-    const fpathLine = 'fpath=($HOME/.zsh/completion $fpath)';
-    
+    let zshrcContent = '';
     try {
-      const { stdout } = await execAsync(`grep -q "${fpathLine}" "${zshrcPath}" && echo exists || echo not_exists`);
-      if (!stdout.includes('exists')) {
-        await execAsync(`echo '${fpathLine}' >> "${zshrcPath}"`);
-      }
+      zshrcContent = await fs.promises.readFile(zshrcPath, 'utf-8');
     } catch {
-      // Ignore grep errors
+      // File doesn't exist, create it
+      zshrcContent = '';
     }
     
-    console.log('Zsh completion installed to:', completionPath);
+    // Add fpath if not present
+    if (!zshrcContent.includes(fpathLine)) {
+      const updatedContent = zshrcContent + `\n# Ralph TUI completion\n${fpathLine}\n`;
+      await fs.promises.writeFile(zshrcPath, updatedContent, 'utf-8');
+    }
+    
+    // Ensure compinit is present
+    if (!zshrcContent.includes('compinit')) {
+      await fs.promises.appendFile(zshrcPath, `\n${compinitLine}\n`, 'utf-8');
+    }
   } catch (error) {
-    throw new Error(`Failed to install zsh completion: ${error}`);
+    // Non-fatal - completion script is installed, just may need manual config
   }
 }
 
@@ -335,28 +454,38 @@ async function installZshCompletion(script: string): Promise<void> {
  * Install fish completion.
  */
 async function installFishCompletion(script: string): Promise<void> {
-  const completionPath = `${process.env.HOME}/.config/fish/completions/ralph-tui.fish`;
+  const home = process.env.HOME || '';
+  const completionDir = `${home}/.config/fish/completions`;
+  const completionPath = `${completionDir}/ralph-tui.fish`;
   
-  try {
-    await execAsync(`mkdir -p "${process.env.HOME}/.config/fish/completions"`);
-    await execAsync(`echo '${script.replace(/'/g, "'\\''")}' > "${completionPath}"`);
-    console.log('Fish completion installed to:', completionPath);
-  } catch (error) {
-    throw new Error(`Failed to install fish completion: ${error}`);
-  }
+  // Ensure directory exists
+  await fs.promises.mkdir(completionDir, { recursive: true });
+  
+  // Write completion script
+  await fs.promises.writeFile(completionPath, script, 'utf-8');
 }
 
 /**
  * Install PowerShell completion.
  */
 async function installPowerShellCompletion(script: string): Promise<void> {
-  const profilePath = `${process.env.USERPROFILE}\Documents\WindowsPowerShell\Microsoft.PowerShell_profile.ps1`;
+  const userProfile = process.env.USERPROFILE || '';
+  const profileDir = `${userProfile}\\Documents\\WindowsPowerShell`;
+  const profilePath = `${profileDir}\\Microsoft.PowerShell_profile.ps1`;
   
+  // Ensure directory exists
+  await fs.promises.mkdir(profileDir, { recursive: true });
+  
+  // Check if already installed
+  let profileContent = '';
   try {
-    await execAsync(`echo '${script.replace(/'/g, "'`'")}' >> "${profilePath}"`);
-    console.log('PowerShell completion added to profile:', profilePath);
-  } catch (error) {
-    throw new Error(`Failed to install PowerShell completion: ${error}`);
+    profileContent = await fs.promises.readFile(profilePath, 'utf-8');
+  } catch {
+    // File doesn't exist
+  }
+  
+  if (!profileContent.includes('Register-ArgumentCompleter -CommandName ralph-tui')) {
+    await fs.promises.appendFile(profilePath, `\n${script}\n`, 'utf-8');
   }
 }
 
@@ -365,41 +494,36 @@ async function installPowerShellCompletion(script: string): Promise<void> {
  */
 export async function isCompletionInstalled(shell?: ShellType): Promise<boolean> {
   const detectedShell = shell || await detectShell();
+  const shellInfo = getShellInfo(detectedShell);
+  
+  if (!shellInfo) {
+    return false;
+  }
   
   try {
-    switch (detectedShell) {
-      case 'bash':
-        // Check system completion or .bashrc
-        const bashCompletionPath = `${process.env.HOME}/.local/share/bash-completion/completions/ralph-tui`;
-        const bashrcPath = `${process.env.HOME}/.bashrc`;
-        
-        try {
-          await execAsync(`test -f "${bashCompletionPath}"`);
-          return true;
-        } catch {
-          const { stdout } = await execAsync(`grep -q "ralph-tui" "${bashrcPath}" && echo exists || echo not_exists`);
-          return stdout.includes('exists');
-        }
-        
-      case 'zsh':
-        const zshCompletionPath = `${process.env.HOME}/.zsh/completion/_ralph-tui`;
-        await execAsync(`test -f "${zshCompletionPath}"`);
-        return true;
-        
-      case 'fish':
-        const fishCompletionPath = `${process.env.HOME}/.config/fish/completions/ralph-tui.fish`;
-        await execAsync(`test -f "${fishCompletionPath}"`);
-        return true;
-        
-      case 'powershell':
-        const profilePath = `${process.env.USERPROFILE}\Documents\WindowsPowerShell\Microsoft.PowerShell_profile.ps1`;
-        const { stdout } = await execAsync(`Get-Content "${profilePath}" | Select-String "ralph-tui" -Quiet`);
-        return stdout.trim() === 'True';
-        
-      default:
-        return false;
-    }
+    await fs.promises.access(shellInfo.completionPath, fs.constants.R_OK);
+    return true;
   } catch {
     return false;
   }
+}
+
+/**
+ * Uninstall shell completion for the current shell.
+ */
+export async function uninstallShellCompletion(shell?: ShellType): Promise<ShellInfo> {
+  const detectedShell = shell || await detectShell();
+  const shellInfo = getShellInfo(detectedShell);
+  
+  if (!shellInfo) {
+    throw new Error(`Unknown shell: ${detectedShell}`);
+  }
+  
+  try {
+    await fs.promises.unlink(shellInfo.completionPath);
+  } catch {
+    // File may not exist
+  }
+  
+  return shellInfo;
 }

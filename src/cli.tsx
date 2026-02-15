@@ -246,7 +246,8 @@ async function handleSubcommand(args: string[]): Promise<boolean> {
   // Completion command (shell completion management)
   if (command === 'completion') {
     const completionCommand = createCompletionCommand();
-    await completionCommand.parseAsync(args, { from: 'user' });
+    // from: 'user' means pass only subcommands (skip 'completion' itself)
+    await completionCommand.parseAsync(args.slice(1), { from: 'user' });
     return true;
   }
 
